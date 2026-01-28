@@ -1,7 +1,14 @@
 import { motion } from "framer-motion";
-import { Music, Sparkles, Zap } from "lucide-react";
+import { Music, Sparkles, Zap, Download, ArrowLeft } from "lucide-react";
+import { Link } from "wouter";
+import { Button } from "@/components/ui/button";
 
-export function Header() {
+interface HeaderProps {
+  showBackToConverter?: boolean;
+  showDownloaderLink?: boolean;
+}
+
+export function Header({ showBackToConverter, showDownloaderLink = true }: HeaderProps) {
   return (
     <motion.header
       initial={{ opacity: 0, y: -20 }}
@@ -20,6 +27,21 @@ export function Header() {
         }}
         transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
       />
+
+      {showBackToConverter && (
+        <div className="absolute top-4 left-4 z-20">
+          <Link href="/">
+            <Button
+              variant="ghost"
+              className="gap-2 text-muted-foreground hover:text-foreground"
+              data-testid="button-back-to-converter"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back to Converter
+            </Button>
+          </Link>
+        </div>
+      )}
 
       <div className="relative z-10 space-y-4">
         <motion.div
@@ -81,6 +103,27 @@ export function Header() {
             </motion.div>
           ))}
         </div>
+
+        {showDownloaderLink && !showBackToConverter && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.8 }}
+            className="pt-6"
+          >
+            <Link href="/downloader">
+              <Button
+                variant="outline"
+                className="gap-2 px-6 py-3 rounded-xl border-2 border-magenta/30 bg-magenta/5 hover:bg-magenta/10 text-magenta font-medium"
+                data-testid="button-go-to-downloader"
+              >
+                <Download className="w-5 h-5" />
+                Social Media Downloader
+                <span className="px-2 py-0.5 rounded-full bg-magenta/20 text-xs font-bold">NEW</span>
+              </Button>
+            </Link>
+          </motion.div>
+        )}
       </div>
     </motion.header>
   );

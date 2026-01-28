@@ -7,6 +7,8 @@ import fs from "fs";
 import ffmpeg from "fluent-ffmpeg";
 import { storage } from "./storage";
 import { createJobSchema, updateJobSchema } from "@shared/schema";
+import { analyzeUrl, downloadMedia, getDownloadPath, cleanupDownload, getAvailableResolutions } from "./ytdlp";
+import type { DownloadJob, MediaInfo } from "@shared/schema";
 
 const UPLOAD_DIR = path.join(process.cwd(), "uploads");
 const OUTPUT_DIR = path.join(process.cwd(), "output");
@@ -239,7 +241,6 @@ export async function registerRoutes(
       await storage.updateJob(jobId, {
         status: "processing",
         progress: 0,
-        bitrate: bitrate,
         trimStart: trimStart,
         trimEnd: trimEnd,
         metadata: metadata,
@@ -394,6 +395,264 @@ export async function registerRoutes(
       }
 
       const deleted = await storage.deleteJob(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  const downloadJobs = new Map<string, DownloadJob>();
+  let activeDownloads = 0;
+  const MAX_CONCURRENT_DOWNLOADS = 3;
+
+  function broadcastDownloadProgress(job: DownloadJob) {
+    const message = JSON.stringify({ type: "download_progress", job });
+    clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  }
+
+  app.post("/api/social/analyze", async (req, res) => {
+    try {
+      const { url } = req.body;
+      
+      if (!url) {
+        return res.status(400).json({ message: "URL is required" });
+      }
+
+      const mediaInfo = await analyzeUrl(url);
+      const resolutions = getAvailableResolutions(mediaInfo.formats);
+      
+      res.json({ 
+        success: true, 
+        mediaInfo,
+        availableResolutions: resolutions,
+      });
+    } catch (error: any) {
+      console.error("Analyze error:", error);
+      res.status(500).json({ message: error.message || "Failed to analyze URL" });
+    }
+  });
+
+  app.post("/api/social/download", async (req, res) => {
+    try {
+      const { 
+        jobId, 
+        url, 
+        platform,
+        title,
+        thumbnail,
+        duration,
+        mode, 
+        formatId, 
+        resolution, 
+        audioFormat, 
+        audioBitrate,
+        metadata 
+      } = req.body;
+      
+      if (!jobId || !url || !mode) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      if (activeDownloads >= MAX_CONCURRENT_DOWNLOADS) {
+        return res.status(429).json({ message: "Too many concurrent downloads. Please wait." });
+      }
+
+      const job: DownloadJob = {
+        id: jobId,
+        url,
+        platform: platform || "unknown",
+        title: title || "Untitled",
+        thumbnail,
+        duration,
+        status: "downloading",
+        progress: 0,
+        mode,
+        selectedFormat: formatId,
+        selectedResolution: resolution,
+        audioFormat: audioFormat || "mp3",
+        audioBitrate: audioBitrate || 192,
+        metadata,
+        createdAt: Date.now(),
+      };
+
+      downloadJobs.set(jobId, job);
+      activeDownloads++;
+      broadcastDownloadProgress(job);
+
+      res.json({ success: true, jobId });
+
+      try {
+        const result = await downloadMedia({
+          jobId,
+          url,
+          mode,
+          formatId,
+          resolution,
+          audioFormat: audioFormat || "mp3",
+          audioBitrate: audioBitrate || 192,
+          metadata,
+          onProgress: (progress, stage) => {
+            const updatedJob = downloadJobs.get(jobId);
+            if (updatedJob) {
+              updatedJob.progress = progress;
+              updatedJob.status = stage === "converting" ? "converting" : "downloading";
+              if (stage === "downloading") {
+                updatedJob.downloadProgress = progress;
+              } else {
+                updatedJob.convertProgress = progress;
+              }
+              downloadJobs.set(jobId, updatedJob);
+              broadcastDownloadProgress(updatedJob);
+            }
+          },
+        });
+
+        const completedJob = downloadJobs.get(jobId);
+        if (completedJob) {
+          completedJob.status = "completed";
+          completedJob.progress = 100;
+          completedJob.outputPath = result.outputPath;
+          completedJob.fileSize = result.fileSize;
+          completedJob.completedAt = Date.now();
+          downloadJobs.set(jobId, completedJob);
+          broadcastDownloadProgress(completedJob);
+        }
+      } catch (error: any) {
+        const failedJob = downloadJobs.get(jobId);
+        if (failedJob) {
+          failedJob.status = "error";
+          failedJob.errorMessage = error.message;
+          downloadJobs.set(jobId, failedJob);
+          broadcastDownloadProgress(failedJob);
+        }
+      } finally {
+        activeDownloads--;
+      }
+    } catch (error: any) {
+      console.error("Download error:", error);
+      res.status(500).json({ message: error.message || "Download failed" });
+    }
+  });
+
+  app.get("/api/social/download/:jobId", async (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const job = downloadJobs.get(jobId);
+
+      if (!job || !job.outputPath) {
+        return res.status(404).json({ message: "Download not found" });
+      }
+
+      const filePath = getDownloadPath(job.outputPath);
+      
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      const ext = path.extname(job.outputPath);
+      const downloadName = job.title.replace(/[<>:"/\\|?*]/g, "_") + ext;
+      const contentType = ext === ".mp3" ? "audio/mpeg" : 
+                          ext === ".m4a" ? "audio/mp4" :
+                          ext === ".mp4" ? "video/mp4" : "application/octet-stream";
+
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(downloadName)}"`);
+      
+      const stream = fs.createReadStream(filePath);
+      stream.pipe(res);
+    } catch (error: any) {
+      console.error("Download file error:", error);
+      res.status(500).json({ message: error.message || "Download failed" });
+    }
+  });
+
+  app.get("/api/social/stream/:jobId", async (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const job = downloadJobs.get(jobId);
+
+      if (!job || !job.outputPath) {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      const filePath = getDownloadPath(job.outputPath);
+      
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      const stat = fs.statSync(filePath);
+      const ext = path.extname(job.outputPath);
+      const contentType = ext === ".mp3" ? "audio/mpeg" : 
+                          ext === ".m4a" ? "audio/mp4" :
+                          ext === ".mp4" ? "video/mp4" : "application/octet-stream";
+
+      const range = req.headers.range;
+
+      if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+        const chunksize = end - start + 1;
+        const file = fs.createReadStream(filePath, { start, end });
+
+        res.writeHead(206, {
+          "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+          "Accept-Ranges": "bytes",
+          "Content-Length": chunksize,
+          "Content-Type": contentType,
+        });
+        file.pipe(res);
+      } else {
+        res.writeHead(200, {
+          "Content-Length": stat.size,
+          "Content-Type": contentType,
+        });
+        fs.createReadStream(filePath).pipe(res);
+      }
+    } catch (error: any) {
+      console.error("Stream error:", error);
+      res.status(500).json({ message: error.message || "Stream failed" });
+    }
+  });
+
+  app.get("/api/social/jobs", async (req, res) => {
+    try {
+      const jobs = Array.from(downloadJobs.values());
+      res.json(jobs);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/social/jobs/:id", async (req, res) => {
+    try {
+      const job = downloadJobs.get(req.params.id);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      res.json(job);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/social/jobs/:id", async (req, res) => {
+    try {
+      const job = downloadJobs.get(req.params.id);
+      
+      if (job?.outputPath) {
+        cleanupDownload(job.outputPath);
+      }
+
+      const deleted = downloadJobs.delete(req.params.id);
       if (!deleted) {
         return res.status(404).json({ message: "Job not found" });
       }
