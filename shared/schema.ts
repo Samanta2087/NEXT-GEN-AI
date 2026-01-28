@@ -146,3 +146,119 @@ export const users = {} as any;
 export const insertUserSchema = z.object({ username: z.string(), password: z.string() });
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = { id: string; username: string; password: string };
+
+export const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'svg', 'heic', 'gif', 'bmp', 'tiff'] as const;
+export const IMAGE_OUTPUT_FORMATS = ['jpg', 'png', 'webp', 'pdf'] as const;
+export const PDF_EXTENSIONS = ['pdf'] as const;
+
+export type ImageExtension = typeof IMAGE_EXTENSIONS[number];
+export type ImageOutputFormat = typeof IMAGE_OUTPUT_FORMATS[number];
+export type ImageJobStatus = 'pending' | 'processing' | 'completed' | 'error';
+export type PdfJobStatus = 'pending' | 'processing' | 'completed' | 'error';
+
+export interface ImageJob {
+  id: string;
+  fileName: string;
+  originalName: string;
+  fileSize: number;
+  width: number;
+  height: number;
+  format: string;
+  status: ImageJobStatus;
+  progress: number;
+  outputPath?: string;
+  outputSize?: number;
+  errorMessage?: string;
+  operation: ImageOperation;
+  settings: ImageSettings;
+  createdAt: number;
+  completedAt?: number;
+}
+
+export type ImageOperation = 
+  | 'convert' 
+  | 'resize' 
+  | 'compress' 
+  | 'crop' 
+  | 'rotate' 
+  | 'flip' 
+  | 'remove-bg'
+  | 'to-pdf'
+  | 'strip-exif';
+
+export interface ImageSettings {
+  outputFormat?: ImageOutputFormat;
+  width?: number;
+  height?: number;
+  maintainAspect?: boolean;
+  quality?: number;
+  targetSize?: number;
+  cropX?: number;
+  cropY?: number;
+  cropWidth?: number;
+  cropHeight?: number;
+  rotation?: number;
+  flipH?: boolean;
+  flipV?: boolean;
+}
+
+export interface ImageMetadata {
+  width: number;
+  height: number;
+  format: string;
+  size: number;
+  hasAlpha: boolean;
+  exif?: Record<string, any>;
+  colorSpace?: string;
+  density?: number;
+}
+
+export interface PdfJob {
+  id: string;
+  fileName: string;
+  originalName: string;
+  fileSize: number;
+  pageCount: number;
+  status: PdfJobStatus;
+  progress: number;
+  outputPath?: string;
+  outputSize?: number;
+  errorMessage?: string;
+  operation: PdfOperation;
+  settings: PdfSettings;
+  createdAt: number;
+  completedAt?: number;
+}
+
+export type PdfOperation = 
+  | 'merge' 
+  | 'split' 
+  | 'to-image' 
+  | 'from-image' 
+  | 'compress' 
+  | 'rotate' 
+  | 'delete-pages'
+  | 'reorder';
+
+export interface PdfSettings {
+  pages?: number[];
+  splitRange?: string;
+  imageFormat?: 'jpg' | 'png';
+  imageQuality?: number;
+  rotation?: number;
+  compressionLevel?: 'low' | 'medium' | 'high';
+  pageOrder?: number[];
+}
+
+export interface PdfMetadata {
+  pageCount: number;
+  title?: string;
+  author?: string;
+  subject?: string;
+  creator?: string;
+  producer?: string;
+  creationDate?: string;
+  modificationDate?: string;
+  isEncrypted: boolean;
+  fileSize: number;
+}

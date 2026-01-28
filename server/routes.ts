@@ -8,7 +8,9 @@ import ffmpeg from "fluent-ffmpeg";
 import { storage } from "./storage";
 import { createJobSchema, updateJobSchema } from "@shared/schema";
 import { analyzeUrl, downloadMedia, getDownloadPath, cleanupDownload, getAvailableResolutions } from "./ytdlp";
-import type { DownloadJob, MediaInfo } from "@shared/schema";
+import type { DownloadJob, MediaInfo, ImageJob, PdfJob, ImageSettings, PdfSettings } from "@shared/schema";
+import * as imageProcessor from "./imageProcessor";
+import * as pdfProcessor from "./pdfProcessor";
 
 const UPLOAD_DIR = path.join(process.cwd(), "uploads");
 const OUTPUT_DIR = path.join(process.cwd(), "output");
@@ -661,6 +663,527 @@ export async function registerRoutes(
       res.status(500).json({ message: error.message });
     }
   });
+
+  const imageJobs = new Map<string, ImageJob>();
+  const pdfJobs = new Map<string, PdfJob>();
+
+  const IMAGE_UPLOAD_DIR = path.join(process.cwd(), "uploads", "images");
+  const PDF_UPLOAD_DIR = path.join(process.cwd(), "uploads", "pdfs");
+  
+  if (!fs.existsSync(IMAGE_UPLOAD_DIR)) {
+    fs.mkdirSync(IMAGE_UPLOAD_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(PDF_UPLOAD_DIR)) {
+    fs.mkdirSync(PDF_UPLOAD_DIR, { recursive: true });
+  }
+
+  const imageUpload = multer({
+    storage: multer.diskStorage({
+      destination: IMAGE_UPLOAD_DIR,
+      filename: (req, file, cb) => {
+        const jobId = req.body.jobId || Date.now().toString();
+        const ext = path.extname(file.originalname);
+        cb(null, `${jobId}${ext}`);
+      },
+    }),
+    limits: { fileSize: 50 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+      const allowedTypes = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".svg"];
+      const ext = path.extname(file.originalname).toLowerCase();
+      if (allowedTypes.includes(ext)) {
+        cb(null, true);
+      } else {
+        cb(new Error("Invalid image type"));
+      }
+    },
+  });
+
+  const pdfUpload = multer({
+    storage: multer.diskStorage({
+      destination: PDF_UPLOAD_DIR,
+      filename: (req, file, cb) => {
+        const jobId = req.body.jobId || Date.now().toString();
+        cb(null, `${jobId}.pdf`);
+      },
+    }),
+    limits: { fileSize: 100 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase();
+      if (ext === ".pdf") {
+        cb(null, true);
+      } else {
+        cb(new Error("Only PDF files allowed"));
+      }
+    },
+  });
+
+  app.post("/api/image/upload", imageUpload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      const { jobId } = req.body;
+      const filePath = req.file.path;
+      
+      const metadata = await imageProcessor.getImageMetadata(filePath);
+      
+      const job: ImageJob = {
+        id: jobId,
+        fileName: req.file.filename,
+        originalName: req.file.originalname,
+        fileSize: req.file.size,
+        width: metadata.width,
+        height: metadata.height,
+        format: metadata.format,
+        status: "pending",
+        progress: 0,
+        operation: "convert",
+        settings: {},
+        createdAt: Date.now(),
+      };
+      
+      imageJobs.set(jobId, job);
+      
+      res.json({ 
+        job,
+        metadata,
+        previewUrl: `/api/image/preview/${jobId}`,
+      });
+    } catch (error: any) {
+      console.error("Image upload error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/image/preview/:jobId", async (req, res) => {
+    try {
+      const job = imageJobs.get(req.params.jobId);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      const filePath = path.join(IMAGE_UPLOAD_DIR, job.fileName);
+      const preview = await imageProcessor.createPreview(filePath, 600, 70);
+      
+      res.set("Content-Type", "image/jpeg");
+      res.send(preview);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/image/process", async (req, res) => {
+    try {
+      const { jobId, operation, settings } = req.body;
+      
+      const job = imageJobs.get(jobId);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      job.status = "processing";
+      job.operation = operation;
+      job.settings = settings;
+      imageJobs.set(jobId, job);
+      
+      const inputPath = path.join(IMAGE_UPLOAD_DIR, job.fileName);
+      const outputFormat = settings.outputFormat || "jpg";
+      const outputPath = imageProcessor.getOutputPath(jobId, outputFormat);
+      
+      const result = await imageProcessor.processImage(
+        inputPath,
+        outputPath,
+        operation,
+        settings,
+        (progress) => {
+          job.progress = progress;
+          imageJobs.set(jobId, job);
+          broadcastImageProgress(jobId, progress);
+        }
+      );
+      
+      job.status = "completed";
+      job.progress = 100;
+      job.outputPath = result.outputPath;
+      job.outputSize = result.outputSize;
+      job.completedAt = Date.now();
+      imageJobs.set(jobId, job);
+      
+      res.json({ job });
+    } catch (error: any) {
+      const job = imageJobs.get(req.body.jobId);
+      if (job) {
+        job.status = "error";
+        job.errorMessage = error.message;
+        imageJobs.set(req.body.jobId, job);
+      }
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/image/download/:jobId", async (req, res) => {
+    try {
+      const job = imageJobs.get(req.params.jobId);
+      if (!job || !job.outputPath) {
+        return res.status(404).json({ message: "File not found" });
+      }
+      
+      const ext = path.extname(job.outputPath);
+      const filename = `${job.originalName.replace(/\.[^.]+$/, "")}${ext}`;
+      
+      res.download(job.outputPath, filename);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/image/estimate", async (req, res) => {
+    try {
+      const { jobId, settings } = req.body;
+      
+      const job = imageJobs.get(jobId);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      const inputPath = path.join(IMAGE_UPLOAD_DIR, job.fileName);
+      const estimatedSize = await imageProcessor.estimateOutputSize(inputPath, settings);
+      
+      res.json({ estimatedSize });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/image/jobs", async (req, res) => {
+    res.json(Array.from(imageJobs.values()));
+  });
+
+  app.delete("/api/image/jobs/:id", async (req, res) => {
+    try {
+      const job = imageJobs.get(req.params.id);
+      if (job?.outputPath && fs.existsSync(job.outputPath)) {
+        fs.unlinkSync(job.outputPath);
+      }
+      const inputPath = path.join(IMAGE_UPLOAD_DIR, job?.fileName || "");
+      if (fs.existsSync(inputPath)) {
+        fs.unlinkSync(inputPath);
+      }
+      imageJobs.delete(req.params.id);
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/pdf/upload", pdfUpload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      const { jobId } = req.body;
+      const filePath = req.file.path;
+      
+      const metadata = await pdfProcessor.getPdfMetadata(filePath);
+      
+      if (metadata.isEncrypted) {
+        fs.unlinkSync(filePath);
+        return res.status(400).json({ message: "Password-protected PDFs are not supported" });
+      }
+      
+      const job: PdfJob = {
+        id: jobId,
+        fileName: req.file.filename,
+        originalName: req.file.originalname,
+        fileSize: req.file.size,
+        pageCount: metadata.pageCount,
+        status: "pending",
+        progress: 0,
+        operation: "merge",
+        settings: {},
+        createdAt: Date.now(),
+      };
+      
+      pdfJobs.set(jobId, job);
+      
+      res.json({ job, metadata });
+    } catch (error: any) {
+      console.error("PDF upload error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/pdf/pages/:jobId", async (req, res) => {
+    try {
+      const job = pdfJobs.get(req.params.jobId);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      const filePath = path.join(PDF_UPLOAD_DIR, job.fileName);
+      const pages = await pdfProcessor.getPageThumbnails(filePath);
+      
+      res.json({ pages });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/pdf/merge", async (req, res) => {
+    try {
+      const { jobIds, outputJobId } = req.body;
+      
+      const inputPaths = jobIds.map((id: string) => {
+        const job = pdfJobs.get(id);
+        if (!job) throw new Error(`Job ${id} not found`);
+        return path.join(PDF_UPLOAD_DIR, job.fileName);
+      });
+      
+      const outputPath = pdfProcessor.getOutputPath(outputJobId);
+      
+      const result = await pdfProcessor.mergePdfs(
+        inputPaths,
+        outputPath,
+        (progress) => broadcastPdfProgress(outputJobId, progress)
+      );
+      
+      const outputJob: PdfJob = {
+        id: outputJobId,
+        fileName: `${outputJobId}.pdf`,
+        originalName: "merged.pdf",
+        fileSize: result.outputSize,
+        pageCount: result.pageCount,
+        status: "completed",
+        progress: 100,
+        operation: "merge",
+        settings: {},
+        outputPath: result.outputPath,
+        outputSize: result.outputSize,
+        createdAt: Date.now(),
+        completedAt: Date.now(),
+      };
+      
+      pdfJobs.set(outputJobId, outputJob);
+      
+      res.json({ job: outputJob });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/pdf/split", async (req, res) => {
+    try {
+      const { jobId, pageRanges, outputJobId } = req.body;
+      
+      const job = pdfJobs.get(jobId);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
+      const outputDir = path.join(process.cwd(), "output", "pdfs", outputJobId);
+      
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+      
+      const result = await pdfProcessor.splitPdf(
+        inputPath,
+        outputDir,
+        pageRanges,
+        (progress) => broadcastPdfProgress(outputJobId, progress)
+      );
+      
+      res.json({ outputs: result.outputs });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/pdf/rotate", async (req, res) => {
+    try {
+      const { jobId, pageRotations, outputJobId } = req.body;
+      
+      const job = pdfJobs.get(jobId);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
+      const outputPath = pdfProcessor.getOutputPath(outputJobId);
+      
+      const result = await pdfProcessor.rotatePdfPages(
+        inputPath,
+        outputPath,
+        pageRotations,
+        (progress) => broadcastPdfProgress(outputJobId, progress)
+      );
+      
+      const outputJob: PdfJob = {
+        id: outputJobId,
+        fileName: `${outputJobId}.pdf`,
+        originalName: job.originalName,
+        fileSize: result.outputSize,
+        pageCount: job.pageCount,
+        status: "completed",
+        progress: 100,
+        operation: "rotate",
+        settings: { pages: pageRotations.map((p: any) => p.page) },
+        outputPath: result.outputPath,
+        outputSize: result.outputSize,
+        createdAt: Date.now(),
+        completedAt: Date.now(),
+      };
+      
+      pdfJobs.set(outputJobId, outputJob);
+      
+      res.json({ job: outputJob });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/pdf/delete-pages", async (req, res) => {
+    try {
+      const { jobId, pages, outputJobId } = req.body;
+      
+      const job = pdfJobs.get(jobId);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
+      const outputPath = pdfProcessor.getOutputPath(outputJobId);
+      
+      const result = await pdfProcessor.deletePdfPages(
+        inputPath,
+        outputPath,
+        pages,
+        (progress) => broadcastPdfProgress(outputJobId, progress)
+      );
+      
+      const outputJob: PdfJob = {
+        id: outputJobId,
+        fileName: `${outputJobId}.pdf`,
+        originalName: job.originalName,
+        fileSize: result.outputSize,
+        pageCount: result.pageCount,
+        status: "completed",
+        progress: 100,
+        operation: "delete-pages",
+        settings: { pages },
+        outputPath: result.outputPath,
+        outputSize: result.outputSize,
+        createdAt: Date.now(),
+        completedAt: Date.now(),
+      };
+      
+      pdfJobs.set(outputJobId, outputJob);
+      
+      res.json({ job: outputJob });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/pdf/reorder", async (req, res) => {
+    try {
+      const { jobId, newOrder, outputJobId } = req.body;
+      
+      const job = pdfJobs.get(jobId);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
+      const outputPath = pdfProcessor.getOutputPath(outputJobId);
+      
+      const result = await pdfProcessor.reorderPdfPages(
+        inputPath,
+        outputPath,
+        newOrder,
+        (progress) => broadcastPdfProgress(outputJobId, progress)
+      );
+      
+      const outputJob: PdfJob = {
+        id: outputJobId,
+        fileName: `${outputJobId}.pdf`,
+        originalName: job.originalName,
+        fileSize: result.outputSize,
+        pageCount: newOrder.length,
+        status: "completed",
+        progress: 100,
+        operation: "reorder",
+        settings: { pageOrder: newOrder },
+        outputPath: result.outputPath,
+        outputSize: result.outputSize,
+        createdAt: Date.now(),
+        completedAt: Date.now(),
+      };
+      
+      pdfJobs.set(outputJobId, outputJob);
+      
+      res.json({ job: outputJob });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/pdf/download/:jobId", async (req, res) => {
+    try {
+      const job = pdfJobs.get(req.params.jobId);
+      if (!job || !job.outputPath) {
+        return res.status(404).json({ message: "File not found" });
+      }
+      
+      const filename = job.originalName || "document.pdf";
+      
+      res.download(job.outputPath, filename);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/pdf/jobs", async (req, res) => {
+    res.json(Array.from(pdfJobs.values()));
+  });
+
+  app.delete("/api/pdf/jobs/:id", async (req, res) => {
+    try {
+      const job = pdfJobs.get(req.params.id);
+      if (job?.outputPath && fs.existsSync(job.outputPath)) {
+        fs.unlinkSync(job.outputPath);
+      }
+      const inputPath = path.join(PDF_UPLOAD_DIR, job?.fileName || "");
+      if (fs.existsSync(inputPath)) {
+        fs.unlinkSync(inputPath);
+      }
+      pdfJobs.delete(req.params.id);
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  function broadcastImageProgress(jobId: string, progress: number) {
+    const message = JSON.stringify({ type: "image_progress", jobId, progress });
+    clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  }
+
+  function broadcastPdfProgress(jobId: string, progress: number) {
+    const message = JSON.stringify({ type: "pdf_progress", jobId, progress });
+    clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  }
 
   return httpServer;
 }

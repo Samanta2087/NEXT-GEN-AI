@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Music, Sparkles, Zap, Download, ArrowLeft } from "lucide-react";
+import { Music, Sparkles, Zap, Download, ArrowLeft, Image, FileText } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 
@@ -109,17 +109,27 @@ export function Header({ showBackToConverter, showDownloaderLink = true }: Heade
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: 0.8 }}
-            className="pt-6"
+            className="pt-6 flex flex-wrap items-center justify-center gap-4"
           >
             <Link href="/downloader">
               <Button
                 variant="outline"
-                className="gap-2 px-6 py-3 rounded-xl border-2 border-magenta/30 bg-magenta/5 hover:bg-magenta/10 text-magenta font-medium"
+                className="gap-2 px-6 py-3 rounded-xl border-2 border-magenta/30 bg-magenta/5 text-magenta font-medium"
                 data-testid="button-go-to-downloader"
               >
                 <Download className="w-5 h-5" />
                 Social Media Downloader
-                <span className="px-2 py-0.5 rounded-full bg-magenta/20 text-xs font-bold">NEW</span>
+              </Button>
+            </Link>
+            <Link href="/tools">
+              <Button
+                variant="outline"
+                className="gap-2 px-6 py-3 rounded-xl border-2 border-primary/30 bg-primary/5 text-cyan-600 font-medium"
+                data-testid="button-go-to-tools"
+              >
+                <Image className="w-5 h-5" />
+                Image & PDF Tools
+                <span className="px-2 py-0.5 rounded-full bg-primary/20 text-xs font-bold">NEW</span>
               </Button>
             </Link>
           </motion.div>
