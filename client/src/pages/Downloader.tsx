@@ -15,7 +15,10 @@ import {
   Zap,
   Layers,
   Settings2,
-  Sparkles
+  Sparkles,
+  ChevronDown,
+  FileText,
+  Plus
 } from "lucide-react";
 import { SiYoutube, SiInstagram, SiFacebook } from "react-icons/si";
 import { Button } from "@/components/ui/button";
@@ -85,6 +88,17 @@ function getPlatformGradient(platform: SupportedPlatform): string {
   }
 }
 
+interface QueuedItem {
+  id: string;
+  mediaInfo: MediaInfo;
+  mode: "video" | "audio";
+  resolution?: string;
+  audioFormat?: AudioFormat;
+  audioBitrate?: number;
+  metadata?: { title?: string; artist?: string; album?: string };
+  filenamePreview: string;
+}
+
 export default function Downloader() {
   const [url, setUrl] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -98,6 +112,10 @@ export default function Downloader() {
   const [audioBitrate, setAudioBitrate] = useState<number>(192);
   const [useAutoQuality, setUseAutoQuality] = useState(true);
   
+  const [metadata, setMetadata] = useState<{ title: string; artist: string; album: string }>({ title: "", artist: "", album: "" });
+  const [showMetadataEditor, setShowMetadataEditor] = useState(false);
+  
+  const [pendingQueue, setPendingQueue] = useState<QueuedItem[]>([]);
   const [downloadQueue, setDownloadQueue] = useState<DownloadJob[]>([]);
   const [downloadHistory, setDownloadHistory] = useState<DownloadJob[]>([]);
   
@@ -220,6 +238,90 @@ export default function Downloader() {
       ));
     }
   }, [mediaInfo, mode, selectedResolution, audioFormat, audioBitrate, useAutoQuality]);
+
+  const getFilenamePreview = useCallback((title: string, ext: string) => {
+    return title.replace(/[<>:"/\\|?*]/g, "_").substring(0, 50) + "." + ext;
+  }, []);
+
+  const addToQueue = useCallback(() => {
+    if (!mediaInfo) return;
+    
+    const ext = mode === "audio" ? audioFormat : "mp4";
+    const filenamePreview = getFilenamePreview(metadata.title || mediaInfo.title, ext);
+    
+    const queueItem: QueuedItem = {
+      id: generateId(),
+      mediaInfo,
+      mode,
+      resolution: mode === "video" ? (useAutoQuality ? undefined : selectedResolution) : undefined,
+      audioFormat: mode === "audio" ? audioFormat : undefined,
+      audioBitrate: mode === "audio" ? audioBitrate : undefined,
+      metadata: mode === "audio" && (metadata.title || metadata.artist || metadata.album) 
+        ? { ...metadata } 
+        : undefined,
+      filenamePreview,
+    };
+    
+    setPendingQueue(prev => [...prev, queueItem]);
+    setMediaInfo(null);
+    setUrl("");
+    setMetadata({ title: "", artist: "", album: "" });
+  }, [mediaInfo, mode, selectedResolution, audioFormat, audioBitrate, metadata, useAutoQuality, getFilenamePreview]);
+
+  const removeFromQueue = useCallback((id: string) => {
+    setPendingQueue(prev => prev.filter(item => item.id !== id));
+  }, []);
+
+  const startBatchDownload = useCallback(async () => {
+    for (const item of pendingQueue) {
+      const jobId = generateId();
+      
+      const newJob: DownloadJob = {
+        id: jobId,
+        url: item.mediaInfo.url,
+        platform: item.mediaInfo.platform,
+        title: item.metadata?.title || item.mediaInfo.title,
+        thumbnail: item.mediaInfo.thumbnail,
+        duration: item.mediaInfo.duration,
+        status: "pending",
+        progress: 0,
+        mode: item.mode,
+        selectedResolution: item.resolution,
+        audioFormat: item.audioFormat,
+        audioBitrate: item.audioBitrate,
+        metadata: item.metadata,
+        createdAt: Date.now(),
+      };
+      
+      setDownloadQueue(prev => [...prev, newJob]);
+      
+      try {
+        await fetch("/api/social/download", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jobId,
+            url: item.mediaInfo.url,
+            platform: item.mediaInfo.platform,
+            title: item.metadata?.title || item.mediaInfo.title,
+            thumbnail: item.mediaInfo.thumbnail,
+            duration: item.mediaInfo.duration,
+            mode: item.mode,
+            resolution: item.resolution,
+            audioFormat: item.audioFormat,
+            audioBitrate: item.audioBitrate,
+            metadata: item.metadata,
+          }),
+        });
+      } catch (err: any) {
+        setDownloadQueue(prev => prev.map(j => 
+          j.id === jobId ? { ...j, status: "error" as const, errorMessage: err.message } : j
+        ));
+      }
+    }
+    
+    setPendingQueue([]);
+  }, [pendingQueue]);
 
   const clearHistory = useCallback(() => {
     downloadHistory.forEach(job => {
@@ -593,17 +695,105 @@ export default function Downloader() {
                           </motion.div>
                         )}
                       </AnimatePresence>
+
+                      {mode === "audio" && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          className="mt-4 p-4 rounded-2xl bg-accent/5 border border-accent/20"
+                        >
+                          <button
+                            onClick={() => setShowMetadataEditor(!showMetadataEditor)}
+                            className="flex items-center justify-between w-full text-left"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Settings2 className="w-4 h-4 text-accent" />
+                              <span className="font-medium text-foreground">Metadata Editor</span>
+                              <span className="text-xs text-muted-foreground">(Optional)</span>
+                            </div>
+                            <motion.div
+                              animate={{ rotate: showMetadataEditor ? 180 : 0 }}
+                              className="text-accent"
+                            >
+                              <ChevronDown className="w-4 h-4" />
+                            </motion.div>
+                          </button>
+                          
+                          <AnimatePresence>
+                            {showMetadataEditor && (
+                              <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: "auto" }}
+                                exit={{ opacity: 0, height: 0 }}
+                                className="mt-4 space-y-3"
+                              >
+                                <div>
+                                  <label className="text-xs text-muted-foreground mb-1 block">Title</label>
+                                  <Input
+                                    value={metadata.title}
+                                    onChange={(e) => setMetadata(prev => ({ ...prev, title: e.target.value }))}
+                                    placeholder={mediaInfo?.title || "Enter title..."}
+                                    className="bg-white/70"
+                                    data-testid="input-metadata-title"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs text-muted-foreground mb-1 block">Artist</label>
+                                  <Input
+                                    value={metadata.artist}
+                                    onChange={(e) => setMetadata(prev => ({ ...prev, artist: e.target.value }))}
+                                    placeholder={mediaInfo?.uploader || "Enter artist..."}
+                                    className="bg-white/70"
+                                    data-testid="input-metadata-artist"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs text-muted-foreground mb-1 block">Album</label>
+                                  <Input
+                                    value={metadata.album}
+                                    onChange={(e) => setMetadata(prev => ({ ...prev, album: e.target.value }))}
+                                    placeholder="Enter album..."
+                                    className="bg-white/70"
+                                    data-testid="input-metadata-album"
+                                  />
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </motion.div>
+                      )}
+
+                      <div className="mt-4 p-3 rounded-xl bg-white/50 border border-white/30">
+                        <div className="flex items-center gap-2 text-sm">
+                          <FileText className="w-4 h-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">Filename:</span>
+                          <span className="font-mono text-foreground truncate">
+                            {getFilenamePreview(metadata.title || mediaInfo?.title || "file", mode === "audio" ? audioFormat : "mp4")}
+                          </span>
+                        </div>
+                      </div>
                       
-                      <div className="mt-6">
+                      <div className="mt-6 flex gap-3">
                         <motion.button
-                          data-testid="button-start-download"
-                          onClick={startDownload}
-                          className="w-full h-14 rounded-2xl text-lg font-bold gradient-primary text-white shadow-glow-cyan flex items-center justify-center"
+                          data-testid="button-add-to-queue"
+                          onClick={addToQueue}
+                          className="flex-1 h-12 rounded-xl text-base font-medium border-2 border-primary/30 bg-primary/5 text-primary flex items-center justify-center hover:bg-primary/10 transition-colors"
                           whileHover={{ scale: 1.01 }}
                           whileTap={{ scale: 0.99 }}
                         >
-                          <Download className="w-6 h-6 mr-3" />
-                          Start {mode === "video" ? "Video" : "Audio"} Download
+                          <Plus className="w-5 h-5 mr-2" />
+                          Add to Queue
+                        </motion.button>
+                        
+                        <motion.button
+                          data-testid="button-start-download"
+                          onClick={startDownload}
+                          className="flex-1 h-12 rounded-xl text-base font-bold gradient-primary text-white shadow-glow-cyan flex items-center justify-center"
+                          whileHover={{ scale: 1.01 }}
+                          whileTap={{ scale: 0.99 }}
+                        >
+                          <Download className="w-5 h-5 mr-2" />
+                          Download Now
                         </motion.button>
                       </div>
                     </div>
@@ -611,6 +801,87 @@ export default function Downloader() {
                 </motion.div>
               )}
             </AnimatePresence>
+
+            {pendingQueue.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-3xl glass-strong border border-accent/20 p-6"
+              >
+                <div className="noise" />
+                
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-lime-500 flex items-center justify-center">
+                      <Layers className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-foreground">Batch Queue</h3>
+                      <p className="text-xs text-muted-foreground">{pendingQueue.length} items ready</p>
+                    </div>
+                  </div>
+                  
+                  <motion.button
+                    data-testid="button-start-batch"
+                    onClick={startBatchDownload}
+                    className="px-6 py-3 rounded-xl font-bold gradient-primary text-white shadow-glow-cyan flex items-center gap-2"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    <Zap className="w-5 h-5" />
+                    Start All Downloads
+                  </motion.button>
+                </div>
+                
+                <div className="space-y-3">
+                  {pendingQueue.map((item) => (
+                    <motion.div
+                      key={item.id}
+                      className="p-4 rounded-2xl bg-white/50 border border-white/30"
+                      layout
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="w-16 h-16 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+                          {item.mediaInfo.thumbnail ? (
+                            <img src={item.mediaInfo.thumbnail} alt={item.mediaInfo.title} className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                              <PlatformIcon platform={item.mediaInfo.platform} className={`w-8 h-8 ${getPlatformColor(item.mediaInfo.platform)}`} />
+                            </div>
+                          )}
+                        </div>
+                        
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-medium text-foreground truncate">{item.metadata?.title || item.mediaInfo.title}</h4>
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
+                            <span className={`px-2 py-0.5 rounded-full ${item.mode === "video" ? "bg-primary/10 text-primary" : "bg-accent/10 text-accent"}`}>
+                              {item.mode === "video" ? "Video" : "Audio"}
+                            </span>
+                            {item.resolution && <span>{item.resolution}</span>}
+                            {item.audioFormat && <span className="uppercase">{item.audioFormat}</span>}
+                            {item.audioBitrate && <span>{item.audioBitrate}kbps</span>}
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-1 font-mono truncate">
+                            {item.filenamePreview}
+                          </div>
+                        </div>
+                        
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeFromQueue(item.id)}
+                          className="text-muted-foreground hover:text-red-500 flex-shrink-0"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
 
             {downloadQueue.length > 0 && (
               <motion.div
