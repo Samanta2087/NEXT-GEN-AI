@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, Reorder } from "framer-motion";
 import { 
   Image, 
   FileText, 
@@ -27,14 +27,17 @@ import {
   Sliders,
   ZoomIn,
   ZoomOut,
-  Info
+  Info,
+  GripVertical,
+  Plus,
+  X
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { FloatingOrb } from "@/components/FloatingOrb";
 import { Header } from "@/components/Header";
-import type { ImageJob, PdfJob, ImageOperation, ImageSettings, ImageMetadata } from "@shared/schema";
+import type { ImageJob, PdfJob, ImageOperation, ImageSettings, ImageMetadata, PdfMetadata } from "@shared/schema";
 
 type ToolCategory = "image" | "pdf" | null;
 type ImageTool = "convert" | "resize" | "compress" | "crop" | "rotate" | null;
@@ -97,8 +100,15 @@ export default function Tools() {
   const [flipH, setFlipH] = useState(false);
   const [flipV, setFlipV] = useState(false);
   const [estimatedSize, setEstimatedSize] = useState<number | null>(null);
+
+  const [currentPdfJob, setCurrentPdfJob] = useState<PdfJob | null>(null);
+  const [pdfMetadata, setPdfMetadata] = useState<PdfMetadata | null>(null);
+  const [pdfPages, setPdfPages] = useState<{ pageNumber: number; width: number; height: number; rotation: number; selected: boolean }[]>([]);
+  const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
+  const [mergePdfs, setMergePdfs] = useState<PdfJob[]>([]);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -127,10 +137,176 @@ export default function Tools() {
       setPdfTool(null);
       setCurrentImageJob(null);
       setPreviewUrl(null);
+      setCurrentPdfJob(null);
+      setPdfPages([]);
+      setSelectedPages(new Set());
+      setMergePdfs([]);
     } else if (category) {
       setCategory(null);
     }
   }, [category, imageTool, pdfTool]);
+
+  const handlePdfUpload = useCallback(async (file: File) => {
+    const jobId = generateId();
+    setIsUploading(true);
+    
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("jobId", jobId);
+    
+    try {
+      const response = await fetch("/api/pdf/upload", {
+        method: "POST",
+        body: formData,
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Upload failed");
+      }
+      
+      const data = await response.json();
+      
+      if (pdfTool === "merge") {
+        setMergePdfs(prev => [...prev, data.job]);
+      } else {
+        setCurrentPdfJob(data.job);
+        setPdfMetadata(data.metadata);
+        
+        const pagesResponse = await fetch(`/api/pdf/pages/${jobId}`);
+        if (pagesResponse.ok) {
+          const pagesData = await pagesResponse.json();
+          setPdfPages(pagesData.pages.map((p: any) => ({
+            ...p,
+            rotation: 0,
+            selected: false,
+          })));
+        }
+      }
+      
+      setPdfJobs(prev => [...prev, data.job]);
+    } catch (error: any) {
+      console.error("PDF upload error:", error);
+    } finally {
+      setIsUploading(false);
+    }
+  }, [pdfTool]);
+
+  const handlePdfFileDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file && file.type === "application/pdf") {
+      handlePdfUpload(file);
+    }
+  }, [handlePdfUpload]);
+
+  const handlePdfFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handlePdfUpload(file);
+    }
+  }, [handlePdfUpload]);
+
+  const togglePageSelection = useCallback((pageNum: number) => {
+    setSelectedPages(prev => {
+      const next = new Set(prev);
+      if (next.has(pageNum)) {
+        next.delete(pageNum);
+      } else {
+        next.add(pageNum);
+      }
+      return next;
+    });
+  }, []);
+
+  const rotatePage = useCallback((pageNum: number, deg: number) => {
+    setPdfPages(prev => prev.map(p => 
+      p.pageNumber === pageNum 
+        ? { ...p, rotation: (p.rotation + deg) % 360 }
+        : p
+    ));
+  }, []);
+
+  const handlePdfProcess = useCallback(async () => {
+    if (!currentPdfJob) return;
+    
+    setIsProcessing(true);
+    setProcessingProgress(0);
+    
+    const outputJobId = generateId();
+    
+    try {
+      let endpoint = "";
+      let body: any = {};
+      
+      switch (pdfTool) {
+        case "rotate":
+          endpoint = "/api/pdf/rotate";
+          body = {
+            jobId: currentPdfJob.id,
+            outputJobId,
+            pageRotations: pdfPages
+              .filter(p => p.rotation !== 0)
+              .map(p => ({ page: p.pageNumber, rotation: p.rotation })),
+          };
+          break;
+          
+        case "delete":
+          endpoint = "/api/pdf/delete-pages";
+          body = {
+            jobId: currentPdfJob.id,
+            outputJobId,
+            pages: Array.from(selectedPages),
+          };
+          break;
+          
+        case "reorder":
+          endpoint = "/api/pdf/reorder";
+          body = {
+            jobId: currentPdfJob.id,
+            outputJobId,
+            newOrder: pdfPages.map(p => p.pageNumber),
+          };
+          break;
+          
+        case "merge":
+          endpoint = "/api/pdf/merge";
+          body = {
+            jobIds: mergePdfs.map(p => p.id),
+            outputJobId,
+          };
+          break;
+          
+        default:
+          return;
+      }
+      
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      
+      if (!response.ok) {
+        throw new Error("Processing failed");
+      }
+      
+      const data = await response.json();
+      setCurrentPdfJob(data.job);
+      setPdfJobs(prev => [...prev, data.job]);
+    } catch (error: any) {
+      console.error("PDF processing error:", error);
+    } finally {
+      setIsProcessing(false);
+      setProcessingProgress(100);
+    }
+  }, [currentPdfJob, pdfTool, pdfPages, selectedPages, mergePdfs]);
+
+  const handlePdfDownload = useCallback(() => {
+    if (currentPdfJob?.status === "completed") {
+      window.location.href = `/api/pdf/download/${currentPdfJob.id}`;
+    }
+  }, [currentPdfJob]);
 
   const handleImageUpload = useCallback(async (file: File) => {
     const jobId = generateId();
@@ -761,35 +937,330 @@ export default function Tools() {
                 exit={{ opacity: 0, x: -50 }}
                 className="space-y-6"
               >
-                <div className="flex items-center gap-4 mb-6">
-                  <Button
-                    data-testid="button-back-pdf"
-                    variant="ghost"
-                    size="icon"
-                    onClick={handleBack}
-                  >
-                    <ArrowLeft className="w-5 h-5" />
-                  </Button>
-                  <h1 className="text-2xl font-bold text-foreground capitalize">{pdfTool} PDF</h1>
-                </div>
-                
-                <div className="rounded-3xl glass-strong border border-accent/20 p-8 text-center">
-                  <div className="noise" />
-                  <div className="w-20 h-20 mx-auto rounded-2xl bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center mb-6 shadow-glow-magenta">
-                    <FileText className="w-10 h-10 text-white" />
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-4">
+                    <Button
+                      data-testid="button-back-pdf"
+                      variant="ghost"
+                      size="icon"
+                      onClick={handleBack}
+                    >
+                      <ArrowLeft className="w-5 h-5" />
+                    </Button>
+                    <h1 className="text-2xl font-bold text-foreground capitalize">
+                      {pdfTool === "delete" ? "Delete Pages" : pdfTool} PDF
+                    </h1>
                   </div>
-                  <h2 className="text-2xl font-bold text-foreground mb-2">PDF {pdfTool} Workspace</h2>
-                  <p className="text-muted-foreground mb-6">Upload PDF files to get started with the {pdfTool} tool</p>
                   
-                  <Button
-                    data-testid="button-upload-pdf"
-                    className="bg-gradient-to-r from-purple-500 to-pink-600 text-white"
-                    onClick={() => {}}
-                  >
-                    <Upload className="w-5 h-5 mr-2" />
-                    Upload PDF
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    {currentPdfJob?.status === "completed" && (
+                      <Button
+                        data-testid="button-download-pdf"
+                        onClick={handlePdfDownload}
+                        variant="outline"
+                      >
+                        <Download className="w-4 h-4 mr-2" />
+                        Download
+                      </Button>
+                    )}
+                    <Button
+                      data-testid="button-process-pdf"
+                      onClick={handlePdfProcess}
+                      disabled={
+                        isProcessing || 
+                        (pdfTool === "merge" && mergePdfs.length < 2) ||
+                        (pdfTool !== "merge" && !currentPdfJob)
+                      }
+                      className="bg-gradient-to-r from-purple-500 to-pink-600 text-white"
+                    >
+                      {isProcessing ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Processing...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-4 h-4 mr-2" />
+                          {pdfTool === "rotate" ? "Apply Rotations" :
+                           pdfTool === "delete" ? `Delete ${selectedPages.size} Pages` :
+                           pdfTool === "reorder" ? "Apply New Order" :
+                           pdfTool === "merge" ? "Merge PDFs" : "Process"}
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
+
+                {pdfTool === "merge" ? (
+                  <div className="grid lg:grid-cols-2 gap-6">
+                    <div className="rounded-2xl glass-strong border border-accent/20 p-4">
+                      <div className="noise" />
+                      <h3 className="font-bold text-foreground mb-4 flex items-center gap-2">
+                        <Plus className="w-5 h-5 text-purple-600" />
+                        Add PDFs to Merge
+                      </h3>
+                      
+                      <div
+                        className="border-2 border-dashed border-accent/30 rounded-xl p-6 text-center cursor-pointer hover:border-accent/50 transition-colors"
+                        onDrop={handlePdfFileDrop}
+                        onDragOver={(e) => e.preventDefault()}
+                        onClick={() => pdfInputRef.current?.click()}
+                      >
+                        <input
+                          ref={pdfInputRef}
+                          type="file"
+                          accept=".pdf"
+                          className="hidden"
+                          onChange={handlePdfFileSelect}
+                          data-testid="input-pdf-upload"
+                        />
+                        
+                        {isUploading ? (
+                          <Loader2 className="w-8 h-8 text-purple-600 mx-auto animate-spin" />
+                        ) : (
+                          <>
+                            <FileText className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                            <p className="text-foreground font-medium">Drop PDF here</p>
+                            <p className="text-sm text-muted-foreground">or click to browse</p>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="rounded-2xl glass-strong border border-accent/20 p-4">
+                      <div className="noise" />
+                      <h3 className="font-bold text-foreground mb-4 flex items-center gap-2">
+                        <Layers className="w-5 h-5 text-purple-600" />
+                        PDF Queue ({mergePdfs.length})
+                      </h3>
+                      
+                      {mergePdfs.length === 0 ? (
+                        <div className="text-center py-8 text-muted-foreground">
+                          <Combine className="w-10 h-10 mx-auto mb-2 opacity-50" />
+                          <p>Add at least 2 PDFs to merge</p>
+                        </div>
+                      ) : (
+                        <Reorder.Group
+                          axis="y"
+                          values={mergePdfs}
+                          onReorder={setMergePdfs}
+                          className="space-y-2"
+                        >
+                          {mergePdfs.map((pdf, index) => (
+                            <Reorder.Item
+                              key={pdf.id}
+                              value={pdf}
+                              className="flex items-center gap-3 p-3 rounded-xl bg-white/50 border border-accent/10 cursor-grab active:cursor-grabbing"
+                            >
+                              <GripVertical className="w-4 h-4 text-muted-foreground" />
+                              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center text-white font-bold text-sm">
+                                {index + 1}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium text-foreground truncate">{pdf.originalName}</p>
+                                <p className="text-xs text-muted-foreground">{pdf.pageCount} pages</p>
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setMergePdfs(prev => prev.filter(p => p.id !== pdf.id))}
+                                data-testid={`button-remove-pdf-${index}`}
+                              >
+                                <X className="w-4 h-4" />
+                              </Button>
+                            </Reorder.Item>
+                          ))}
+                        </Reorder.Group>
+                      )}
+                    </div>
+                  </div>
+                ) : !currentPdfJob ? (
+                  <div className="rounded-3xl glass-strong border border-accent/20 p-8 text-center max-w-xl mx-auto">
+                    <div className="noise" />
+                    <div
+                      className="border-2 border-dashed border-accent/30 rounded-2xl p-12 cursor-pointer hover:border-accent/50 transition-colors"
+                      onDrop={handlePdfFileDrop}
+                      onDragOver={(e) => e.preventDefault()}
+                      onClick={() => pdfInputRef.current?.click()}
+                    >
+                      <input
+                        ref={pdfInputRef}
+                        type="file"
+                        accept=".pdf"
+                        className="hidden"
+                        onChange={handlePdfFileSelect}
+                        data-testid="input-pdf-upload"
+                      />
+                      
+                      {isUploading ? (
+                        <Loader2 className="w-12 h-12 text-purple-600 mx-auto animate-spin" />
+                      ) : (
+                        <>
+                          <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center mb-4 shadow-glow-magenta">
+                            <FileText className="w-8 h-8 text-white" />
+                          </div>
+                          <h2 className="text-xl font-bold text-foreground mb-2">Upload PDF</h2>
+                          <p className="text-muted-foreground">
+                            Drop your PDF file here or click to browse
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-4 rounded-2xl glass-strong border border-accent/20">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center">
+                          <FileText className="w-6 h-6 text-white" />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-foreground">{currentPdfJob.originalName}</h3>
+                          <p className="text-sm text-muted-foreground">
+                            {currentPdfJob.pageCount} pages • {formatFileSize(currentPdfJob.fileSize)}
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setCurrentPdfJob(null);
+                          setPdfPages([]);
+                          setSelectedPages(new Set());
+                        }}
+                      >
+                        <Trash2 className="w-4 h-4 mr-2" />
+                        Clear
+                      </Button>
+                    </div>
+
+                    <div className="rounded-2xl glass-strong border border-accent/20 p-4">
+                      <div className="noise" />
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-bold text-foreground flex items-center gap-2">
+                          <Layers className="w-5 h-5 text-purple-600" />
+                          Pages
+                        </h3>
+                        {pdfTool === "delete" && selectedPages.size > 0 && (
+                          <span className="text-sm text-purple-600 font-medium">
+                            {selectedPages.size} selected for deletion
+                          </span>
+                        )}
+                      </div>
+
+                      {pdfTool === "reorder" ? (
+                        <Reorder.Group
+                          axis="y"
+                          values={pdfPages}
+                          onReorder={setPdfPages}
+                          className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4"
+                        >
+                          {pdfPages.map((page, index) => (
+                            <Reorder.Item
+                              key={page.pageNumber}
+                              value={page}
+                              className="cursor-grab active:cursor-grabbing"
+                            >
+                              <motion.div
+                                className="relative p-3 rounded-xl bg-white/50 border border-accent/10 group"
+                                whileHover={{ scale: 1.02 }}
+                              >
+                                <div className="absolute top-2 left-2 w-6 h-6 rounded-full bg-purple-600 text-white text-xs font-bold flex items-center justify-center">
+                                  {index + 1}
+                                </div>
+                                <div 
+                                  className="aspect-[3/4] rounded-lg bg-gray-100 flex items-center justify-center mb-2"
+                                  style={{ transform: `rotate(${page.rotation}deg)` }}
+                                >
+                                  <FileText className="w-8 h-8 text-gray-300" />
+                                </div>
+                                <p className="text-xs text-center text-muted-foreground">
+                                  Page {page.pageNumber}
+                                </p>
+                                <GripVertical className="absolute bottom-2 right-2 w-4 h-4 text-muted-foreground opacity-50 group-hover:opacity-100" />
+                              </motion.div>
+                            </Reorder.Item>
+                          ))}
+                        </Reorder.Group>
+                      ) : (
+                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                          {pdfPages.map((page) => (
+                            <motion.div
+                              key={page.pageNumber}
+                              className={`relative p-3 rounded-xl border transition-colors cursor-pointer ${
+                                pdfTool === "delete" && selectedPages.has(page.pageNumber)
+                                  ? "bg-red-50 border-red-300"
+                                  : "bg-white/50 border-accent/10 hover:border-accent/30"
+                              }`}
+                              onClick={() => pdfTool === "delete" && togglePageSelection(page.pageNumber)}
+                              whileHover={{ scale: 1.02 }}
+                              data-testid={`page-${page.pageNumber}`}
+                            >
+                              <div className="absolute top-2 left-2 w-6 h-6 rounded-full bg-purple-600 text-white text-xs font-bold flex items-center justify-center">
+                                {page.pageNumber}
+                              </div>
+                              
+                              {pdfTool === "delete" && selectedPages.has(page.pageNumber) && (
+                                <div className="absolute top-2 right-2 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center">
+                                  <X className="w-4 h-4" />
+                                </div>
+                              )}
+                              
+                              <div 
+                                className="aspect-[3/4] rounded-lg bg-gray-100 flex items-center justify-center mb-2 transition-transform"
+                                style={{ transform: `rotate(${page.rotation}deg)` }}
+                              >
+                                <FileText className="w-8 h-8 text-gray-300" />
+                              </div>
+                              
+                              <div className="flex items-center justify-between">
+                                <p className="text-xs text-muted-foreground">
+                                  Page {page.pageNumber}
+                                </p>
+                                
+                                {pdfTool === "rotate" && (
+                                  <div className="flex gap-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        rotatePage(page.pageNumber, -90);
+                                      }}
+                                      data-testid={`rotate-left-${page.pageNumber}`}
+                                    >
+                                      <RotateCcw className="w-3 h-3" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        rotatePage(page.pageNumber, 90);
+                                      }}
+                                      data-testid={`rotate-right-${page.pageNumber}`}
+                                    >
+                                      <RotateCw className="w-3 h-3" />
+                                    </Button>
+                                  </div>
+                                )}
+                              </div>
+                              
+                              {page.rotation !== 0 && (
+                                <div className="absolute -top-1 -right-1 px-1.5 py-0.5 rounded-full bg-purple-600 text-white text-[10px] font-bold">
+                                  {page.rotation}°
+                                </div>
+                              )}
+                            </motion.div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
