@@ -1,37 +1,64 @@
-import { type User, type InsertUser } from "@shared/schema";
-import { randomUUID } from "crypto";
-
-// modify the interface with any CRUD methods
-// you might need
+import type { ConversionJob, CreateJobInput, UpdateJobInput } from "@shared/schema";
 
 export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  createJob(id: string, input: CreateJobInput & { inputPath?: string }): Promise<ConversionJob>;
+  getJob(id: string): Promise<ConversionJob | undefined>;
+  updateJob(id: string, input: UpdateJobInput & { inputPath?: string }): Promise<ConversionJob | undefined>;
+  deleteJob(id: string): Promise<boolean>;
+  getAllJobs(): Promise<ConversionJob[]>;
+  getJobsByStatus(status: ConversionJob["status"]): Promise<ConversionJob[]>;
+}
+
+interface StoredJob extends ConversionJob {
+  inputPath?: string;
 }
 
 export class MemStorage implements IStorage {
-  private users: Map<string, User>;
+  private jobs: Map<string, StoredJob>;
 
   constructor() {
-    this.users = new Map();
+    this.jobs = new Map();
   }
 
-  async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+  async createJob(id: string, input: CreateJobInput & { inputPath?: string }): Promise<ConversionJob> {
+    const job: StoredJob = {
+      id,
+      fileName: input.fileName,
+      originalName: input.originalName,
+      fileSize: input.fileSize,
+      bitrate: input.bitrate,
+      inputPath: input.inputPath,
+      status: "pending",
+      progress: 0,
+      createdAt: Date.now(),
+    };
+    this.jobs.set(id, job);
+    return job;
   }
 
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+  async getJob(id: string): Promise<StoredJob | undefined> {
+    return this.jobs.get(id);
   }
 
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
+  async updateJob(id: string, input: UpdateJobInput & { inputPath?: string }): Promise<StoredJob | undefined> {
+    const job = this.jobs.get(id);
+    if (!job) return undefined;
+
+    const updated: StoredJob = { ...job, ...input };
+    this.jobs.set(id, updated);
+    return updated;
+  }
+
+  async deleteJob(id: string): Promise<boolean> {
+    return this.jobs.delete(id);
+  }
+
+  async getAllJobs(): Promise<ConversionJob[]> {
+    return Array.from(this.jobs.values());
+  }
+
+  async getJobsByStatus(status: ConversionJob["status"]): Promise<ConversionJob[]> {
+    return Array.from(this.jobs.values()).filter(job => job.status === status);
   }
 }
 
