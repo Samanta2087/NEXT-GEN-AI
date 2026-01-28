@@ -71,7 +71,7 @@ function getPlatformColor(platform: SupportedPlatform): string {
     case "facebook":
       return "text-blue-600";
     default:
-      return "text-primary";
+      return "text-cyan-600";
   }
 }
 
@@ -273,7 +273,10 @@ export default function Downloader() {
   }, []);
 
   const startBatchDownload = useCallback(async () => {
-    for (const item of pendingQueue) {
+    const itemsToProcess = [...pendingQueue];
+    const successfulItems: string[] = [];
+    
+    for (const item of itemsToProcess) {
       const jobId = generateId();
       
       const newJob: DownloadJob = {
@@ -296,7 +299,7 @@ export default function Downloader() {
       setDownloadQueue(prev => [...prev, newJob]);
       
       try {
-        await fetch("/api/social/download", {
+        const response = await fetch("/api/social/download", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -313,6 +316,15 @@ export default function Downloader() {
             metadata: item.metadata,
           }),
         });
+        
+        if (response.ok) {
+          successfulItems.push(item.id);
+        } else {
+          const errorData = await response.json().catch(() => ({ message: "Failed to start download" }));
+          setDownloadQueue(prev => prev.map(j => 
+            j.id === jobId ? { ...j, status: "error" as const, errorMessage: errorData.message } : j
+          ));
+        }
       } catch (err: any) {
         setDownloadQueue(prev => prev.map(j => 
           j.id === jobId ? { ...j, status: "error" as const, errorMessage: err.message } : j
@@ -320,7 +332,7 @@ export default function Downloader() {
       }
     }
     
-    setPendingQueue([]);
+    setPendingQueue(prev => prev.filter(item => !successfulItems.includes(item.id)));
   }, [pendingQueue]);
 
   const clearHistory = useCallback(() => {
@@ -535,57 +547,47 @@ export default function Downloader() {
                       </div>
                       
                       <div className="grid grid-cols-2 gap-4 mb-6">
-                        <motion.button
+                        <Button
                           data-testid="button-mode-video"
+                          variant="outline"
                           onClick={() => setMode("video")}
-                          className={`relative p-6 rounded-2xl border-2 transition-all ${
+                          className={`relative flex-col items-start gap-2 rounded-2xl border-2 ${
                             mode === "video" 
-                              ? "border-primary bg-primary/10 shadow-glow-cyan" 
-                              : "border-white/20 bg-white/50 hover:border-primary/50"
+                              ? "border-primary bg-primary/10" 
+                              : "border-white/20 bg-white/50"
                           }`}
-                          whileHover={{ scale: 1.02 }}
-                          whileTap={{ scale: 0.98 }}
                         >
-                          <Video className={`w-8 h-8 mb-3 ${mode === "video" ? "text-primary" : "text-muted-foreground"}`} />
+                          <Video className={`w-8 h-8 ${mode === "video" ? "text-cyan-600" : "text-muted-foreground"}`} />
                           <h4 className="font-bold text-foreground">Video</h4>
-                          <p className="text-xs text-muted-foreground mt-1">Full video with audio</p>
+                          <p className="text-xs text-muted-foreground">Full video with audio</p>
                           
                           {mode === "video" && (
-                            <motion.div
-                              className="absolute top-3 right-3"
-                              initial={{ scale: 0 }}
-                              animate={{ scale: 1 }}
-                            >
-                              <CheckCircle className="w-5 h-5 text-primary" />
-                            </motion.div>
+                            <div className="absolute top-3 right-3">
+                              <CheckCircle className="w-5 h-5 text-cyan-600" />
+                            </div>
                           )}
-                        </motion.button>
+                        </Button>
                         
-                        <motion.button
+                        <Button
                           data-testid="button-mode-audio"
+                          variant="outline"
                           onClick={() => setMode("audio")}
-                          className={`relative p-6 rounded-2xl border-2 transition-all ${
+                          className={`relative flex-col items-start gap-2 rounded-2xl border-2 ${
                             mode === "audio" 
-                              ? "border-accent bg-accent/10 shadow-glow-lime" 
-                              : "border-white/20 bg-white/50 hover:border-accent/50"
+                              ? "border-accent bg-accent/10" 
+                              : "border-white/20 bg-white/50"
                           }`}
-                          whileHover={{ scale: 1.02 }}
-                          whileTap={{ scale: 0.98 }}
                         >
-                          <Music className={`w-8 h-8 mb-3 ${mode === "audio" ? "text-accent" : "text-muted-foreground"}`} />
+                          <Music className={`w-8 h-8 ${mode === "audio" ? "text-accent" : "text-muted-foreground"}`} />
                           <h4 className="font-bold text-foreground">Audio Only</h4>
-                          <p className="text-xs text-muted-foreground mt-1">Extract audio track</p>
+                          <p className="text-xs text-muted-foreground">Extract audio track</p>
                           
                           {mode === "audio" && (
-                            <motion.div
-                              className="absolute top-3 right-3"
-                              initial={{ scale: 0 }}
-                              animate={{ scale: 1 }}
-                            >
+                            <div className="absolute top-3 right-3">
                               <CheckCircle className="w-5 h-5 text-accent" />
-                            </motion.div>
+                            </div>
                           )}
-                        </motion.button>
+                        </Button>
                       </div>
 
                       <AnimatePresence mode="wait">
@@ -603,37 +605,28 @@ export default function Downloader() {
                                 Quality Settings
                               </h4>
                               
-                              <motion.button
+                              <Button
+                                data-testid="button-auto-quality"
+                                variant={useAutoQuality ? "default" : "outline"}
+                                size="sm"
                                 onClick={() => setUseAutoQuality(!useAutoQuality)}
-                                className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
-                                  useAutoQuality 
-                                    ? "bg-primary text-white" 
-                                    : "bg-white/50 text-muted-foreground border border-white/30"
-                                }`}
-                                whileHover={{ scale: 1.02 }}
-                                whileTap={{ scale: 0.98 }}
                               >
                                 {useAutoQuality ? "Auto (Best)" : "Manual"}
-                              </motion.button>
+                              </Button>
                             </div>
                             
                             {!useAutoQuality && (
                               <div className="grid grid-cols-4 gap-2">
                                 {availableResolutions.map((res) => (
-                                  <motion.button
+                                  <Button
                                     key={res}
                                     data-testid={`button-resolution-${res}`}
+                                    variant={selectedResolution === res ? "default" : "outline"}
                                     onClick={() => setSelectedResolution(res)}
-                                    className={`p-3 rounded-xl text-center transition-all ${
-                                      selectedResolution === res
-                                        ? "bg-primary text-white shadow-glow-cyan"
-                                        : "bg-white/50 text-foreground border border-white/30 hover:border-primary/50"
-                                    }`}
-                                    whileHover={{ scale: 1.02 }}
-                                    whileTap={{ scale: 0.98 }}
+                                    className="rounded-xl"
                                   >
                                     <span className="font-bold">{res}</span>
-                                  </motion.button>
+                                  </Button>
                                 ))}
                               </div>
                             )}
@@ -652,20 +645,15 @@ export default function Downloader() {
                               <h4 className="font-medium text-foreground mb-3">Audio Format</h4>
                               <div className="grid grid-cols-3 gap-2">
                                 {AUDIO_FORMATS.map((format) => (
-                                  <motion.button
+                                  <Button
                                     key={format}
                                     data-testid={`button-format-${format}`}
+                                    variant={audioFormat === format ? "default" : "outline"}
                                     onClick={() => setAudioFormat(format)}
-                                    className={`p-3 rounded-xl text-center uppercase font-bold transition-all ${
-                                      audioFormat === format
-                                        ? "bg-accent text-white shadow-glow-lime"
-                                        : "bg-white/50 text-foreground border border-white/30 hover:border-accent/50"
-                                    }`}
-                                    whileHover={{ scale: 1.02 }}
-                                    whileTap={{ scale: 0.98 }}
+                                    className={`rounded-xl uppercase font-bold ${audioFormat === format ? "bg-accent border-accent" : ""}`}
                                   >
                                     {format}
-                                  </motion.button>
+                                  </Button>
                                 ))}
                               </div>
                             </div>
@@ -674,21 +662,16 @@ export default function Downloader() {
                               <h4 className="font-medium text-foreground mb-3">Bitrate</h4>
                               <div className="grid grid-cols-4 gap-2">
                                 {AUDIO_BITRATES.map((bitrate) => (
-                                  <motion.button
+                                  <Button
                                     key={bitrate}
                                     data-testid={`button-bitrate-${bitrate}`}
+                                    variant={audioBitrate === bitrate ? "default" : "outline"}
                                     onClick={() => setAudioBitrate(bitrate)}
-                                    className={`p-3 rounded-xl text-center transition-all ${
-                                      audioBitrate === bitrate
-                                        ? "bg-accent text-white shadow-glow-lime"
-                                        : "bg-white/50 text-foreground border border-white/30 hover:border-accent/50"
-                                    }`}
-                                    whileHover={{ scale: 1.02 }}
-                                    whileTap={{ scale: 0.98 }}
+                                    className={`rounded-xl ${audioBitrate === bitrate ? "bg-accent border-accent" : ""}`}
                                   >
                                     <span className="font-bold">{bitrate}</span>
                                     <span className="text-xs opacity-70 ml-1">kbps</span>
-                                  </motion.button>
+                                  </Button>
                                 ))}
                               </div>
                             </div>
@@ -702,7 +685,9 @@ export default function Downloader() {
                           animate={{ opacity: 1, height: "auto" }}
                           className="mt-4 p-4 rounded-2xl bg-accent/5 border border-accent/20"
                         >
-                          <button
+                          <Button
+                            data-testid="button-toggle-metadata"
+                            variant="ghost"
                             onClick={() => setShowMetadataEditor(!showMetadataEditor)}
                             className="flex items-center justify-between w-full text-left"
                           >
@@ -717,7 +702,7 @@ export default function Downloader() {
                             >
                               <ChevronDown className="w-4 h-4" />
                             </motion.div>
-                          </button>
+                          </Button>
                           
                           <AnimatePresence>
                             {showMetadataEditor && (
@@ -774,27 +759,24 @@ export default function Downloader() {
                       </div>
                       
                       <div className="mt-6 flex gap-3">
-                        <motion.button
+                        <Button
                           data-testid="button-add-to-queue"
+                          variant="outline"
                           onClick={addToQueue}
-                          className="flex-1 h-12 rounded-xl text-base font-medium border-2 border-primary/30 bg-primary/5 text-primary flex items-center justify-center hover:bg-primary/10 transition-colors"
-                          whileHover={{ scale: 1.01 }}
-                          whileTap={{ scale: 0.99 }}
+                          className="flex-1"
                         >
                           <Plus className="w-5 h-5 mr-2" />
                           Add to Queue
-                        </motion.button>
+                        </Button>
                         
-                        <motion.button
+                        <Button
                           data-testid="button-start-download"
                           onClick={startDownload}
-                          className="flex-1 h-12 rounded-xl text-base font-bold gradient-primary text-white shadow-glow-cyan flex items-center justify-center"
-                          whileHover={{ scale: 1.01 }}
-                          whileTap={{ scale: 0.99 }}
+                          className="flex-1 gradient-primary text-white border-0"
                         >
                           <Download className="w-5 h-5 mr-2" />
                           Download Now
-                        </motion.button>
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -869,10 +851,11 @@ export default function Downloader() {
                         </div>
                         
                         <Button
+                          data-testid={`button-remove-queue-${item.id}`}
                           variant="ghost"
                           size="icon"
                           onClick={() => removeFromQueue(item.id)}
-                          className="text-muted-foreground hover:text-red-500 flex-shrink-0"
+                          className="text-muted-foreground flex-shrink-0"
                         >
                           <Trash2 className="w-4 h-4" />
                         </Button>
@@ -1026,15 +1009,18 @@ export default function Downloader() {
                         </div>
                         
                         {job.status === "completed" ? (
-                          <a
-                            href={`/api/social/download/${job.id}`}
-                            className="px-4 py-2 rounded-xl bg-accent text-white font-medium flex items-center gap-2 hover:bg-accent/90 transition-colors"
+                          <Button
+                            data-testid={`link-download-${job.id}`}
+                            asChild
+                            className="bg-accent text-white"
                           >
-                            <Download className="w-4 h-4" />
-                            Download
-                          </a>
+                            <a href={`/api/social/download/${job.id}`}>
+                              <Download className="w-4 h-4 mr-2" />
+                              Download
+                            </a>
+                          </Button>
                         ) : (
-                          <div className="px-4 py-2 rounded-xl bg-red-500/10 text-red-600 text-sm">
+                          <div data-testid={`status-failed-${job.id}`} className="px-4 py-2 rounded-xl bg-red-500/10 text-red-600 text-sm">
                             Failed
                           </div>
                         )}
