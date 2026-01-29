@@ -423,3 +423,236 @@
     inset: -1px;
   }
 }
+
+/* ========================================
+   MOBILE-FIRST PERFORMANCE OPTIMIZATIONS
+   ======================================== */
+
+/* GPU-accelerated transforms */
+.gpu-accelerate {
+  transform: translateZ(0);
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+/* Reduce motion for performance/accessibility */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  
+  .animate-float,
+  .animate-pulse-glow,
+  .animate-shimmer {
+    animation: none !important;
+  }
+}
+
+/* Touch-friendly targets (min 44px) */
+@layer utilities {
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  .touch-target-lg {
+    min-height: 48px;
+    min-width: 48px;
+  }
+}
+
+/* Mobile-specific optimizations */
+@media (max-width: 768px) {
+  /* Disable heavy effects on mobile */
+  .glass,
+  .glass-strong {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: rgba(255, 255, 255, 0.95) !important;
+  }
+  
+  /* Reduce shadow complexity on mobile */
+  .shadow-lg,
+  .shadow-xl,
+  .shadow-2xl {
+    box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.1) !important;
+  }
+  
+  /* Faster transitions on mobile */
+  * {
+    transition-duration: 0.1s !important;
+  }
+  
+  /* Disable floating animations on mobile */
+  .animate-float {
+    animation: none !important;
+  }
+  
+  /* Optimize scrolling */
+  .overflow-y-auto,
+  .overflow-x-auto,
+  .overflow-auto {
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+  }
+  
+  /* Smaller scrollbars on mobile */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  
+  /* Hide decorative noise on mobile */
+  .noise::before {
+    display: none !important;
+  }
+  
+  /* Optimize font rendering */
+  body {
+    text-rendering: optimizeSpeed;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* Low-end device optimizations */
+@media (max-width: 768px) and (hover: none) {
+  /* No hover effects on touch devices */
+  .hover-elevate:hover::after,
+  .hover-elevate-2:hover::after {
+    background-color: transparent !important;
+  }
+  
+  /* Disable glow effects */
+  .glow-cyan,
+  .glow-magenta,
+  .glow-lime {
+    box-shadow: none !important;
+  }
+  
+  /* Simplify gradients */
+  .gradient-mesh {
+    background: hsl(var(--background)) !important;
+  }
+}
+
+/* Tablet optimizations */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .glass,
+  .glass-strong {
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+}
+
+/* Safe area insets for notched devices */
+@supports (padding: max(0px)) {
+  .safe-area-inset {
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+}
+
+/* Optimize images */
+img {
+  content-visibility: auto;
+}
+
+/* Contain layout for performance */
+.layout-contain {
+  contain: layout style;
+}
+
+.strict-contain {
+  contain: strict;
+}
+
+/* Smooth 60fps scrolling list */
+.virtual-list {
+  will-change: scroll-position;
+  contain: strict;
+}
+
+/* Fast tap highlight removal */
+button,
+a,
+[role="button"] {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Prevent text selection lag */
+.no-select {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Hardware-accelerated animations only */
+@keyframes fade-in-fast {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scale-in-fast {
+  from { transform: scale(0.95); }
+  to { transform: scale(1); }
+}
+
+.animate-fade-in-fast {
+  animation: fade-in-fast 0.15s ease-out forwards;
+}
+
+.animate-scale-in-fast {
+  animation: scale-in-fast 0.15s ease-out forwards;
+}
+
+/* Compact mode for mobile forms */
+@media (max-width: 768px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important; /* Prevent iOS zoom */
+  }
+  
+  .compact-input {
+    padding: 0.5rem 0.75rem;
+    font-size: 14px;
+  }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .border,
+  [class*="border-"] {
+    border-width: 2px;
+  }
+  
+  .shadow-sm,
+  .shadow,
+  .shadow-md,
+  .shadow-lg {
+    box-shadow: 0 0 0 2px currentColor;
+  }
+}
+
+/* Print optimizations */
+@media print {
+  .glass,
+  .glass-strong,
+  .gradient-mesh {
+    background: white !important;
+    backdrop-filter: none !important;
+  }
+  
+  .animate-float,
+  .animate-pulse-glow,
+  .animate-shimmer {
+    animation: none !important;
+  }
+}
+

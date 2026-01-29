@@ -3,6 +3,15 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 
+// Handle uncaught exceptions and rejections to prevent server crashes
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 const app = express();
 const httpServer = createServer(app);
 
@@ -90,14 +99,19 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
+  httpServer.listen(port, "0.0.0.0", () => {
+    log(`serving on port ${port}`);
+  });
+
+  // Keep the server running
+  httpServer.on('error', (error) => {
+    console.error('Server error:', error);
+  });
+
+  httpServer.on('close', () => {
+    console.log('Server closed');
+  });
+
+  // Prevent the process from exiting
+  process.stdin.resume();
 })();

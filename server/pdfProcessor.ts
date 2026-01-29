@@ -1,6 +1,7 @@
 import { PDFDocument, degrees } from "pdf-lib";
 import path from "path";
 import fs from "fs";
+import { spawn } from "child_process";
 import type { PdfSettings, PdfMetadata, PdfOperation } from "@shared/schema";
 
 const OUTPUT_DIR = path.join(process.cwd(), "output", "pdfs");
@@ -38,6 +39,126 @@ export async function getPdfMetadata(filePath: string): Promise<PdfMetadata> {
     }
     throw error;
   }
+}
+
+export async function compressPdf(
+  inputPath: string,
+  outputPath: string,
+  level: 'low' | 'medium' | 'high' = 'medium',
+  onProgress?: (progress: number) => void
+): Promise<{ outputPath: string; outputSize: number }> {
+  const pdfBytes = fs.readFileSync(inputPath);
+  const pdfDoc = await PDFDocument.load(pdfBytes);
+  
+  onProgress?.(50);
+  
+  // Basic compression by re-saving
+  const compressedBytes = await pdfDoc.save({
+    useObjectStreams: level !== 'low',
+    addDefaultPage: false,
+  });
+  
+  fs.writeFileSync(outputPath, compressedBytes);
+  onProgress?.(100);
+  
+  const stats = fs.statSync(outputPath);
+  
+  return {
+    outputPath,
+    outputSize: stats.size,
+  };
+}
+
+export async function pdfToImages(
+  inputPath: string,
+  outputDir: string,
+  format: 'jpg' | 'png' = 'png',
+  quality: number = 85,
+  onProgress?: (progress: number) => void
+): Promise<{ outputs: { path: string; pageNumber: number; size: number; fileName?: string }[] }> {
+  // Use Python PyMuPDF (fitz) for PDF to image conversion - no external dependencies
+  return new Promise((resolve, reject) => {
+    const pythonScript = `
+import sys
+import json
+import fitz  # PyMuPDF
+import os
+
+input_path = sys.argv[1]
+output_dir = sys.argv[2]
+fmt = sys.argv[3]
+quality = int(sys.argv[4])
+
+try:
+    doc = fitz.open(input_path)
+    outputs = []
+    
+    for page_num in range(len(doc)):
+        page = doc[page_num]
+        # Render at 2x resolution for better quality
+        mat = fitz.Matrix(2, 2)
+        pix = page.get_pixmap(matrix=mat)
+        
+        filename = f"page_{page_num + 1}.{fmt}"
+        output_path = os.path.join(output_dir, filename)
+        
+        if fmt == 'jpg':
+            pix.save(output_path, output="jpeg", jpg_quality=quality)
+        else:
+            pix.save(output_path)
+        
+        size = os.path.getsize(output_path)
+        outputs.append({
+            "path": output_path,
+            "pageNumber": page_num + 1,
+            "size": size,
+            "fileName": filename
+        })
+    
+    doc.close()
+    print(json.dumps({"success": True, "outputs": outputs}))
+except Exception as e:
+    print(json.dumps({"success": False, "error": str(e)}))
+`;
+
+    const python = spawn('python', [
+      '-c', pythonScript,
+      inputPath,
+      outputDir,
+      format,
+      quality.toString()
+    ]);
+
+    let stdout = '';
+    let stderr = '';
+
+    python.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`Python script failed: ${stderr}`));
+        return;
+      }
+
+      try {
+        const result = JSON.parse(stdout.trim());
+        if (result.success) {
+          onProgress?.(100);
+          resolve({ outputs: result.outputs });
+        } else {
+          reject(new Error(result.error));
+        }
+      } catch (e) {
+        reject(new Error(`Failed to parse Python output: ${stdout}`));
+      }
+    });
+  });
 }
 
 export async function getPageThumbnails(

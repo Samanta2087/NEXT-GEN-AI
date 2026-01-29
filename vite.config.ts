@@ -30,11 +30,41 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    // Code splitting for better caching and smaller initial bundle
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Core React dependencies
+          'vendor-react': ['react', 'react-dom'],
+          // UI components (loaded together)
+          'vendor-ui': ['@radix-ui/react-dialog', '@radix-ui/react-tabs', '@radix-ui/react-slider', '@radix-ui/react-switch'],
+          // Framer motion (defer if possible)
+          'vendor-motion': ['framer-motion'],
+          // Query client
+          'vendor-query': ['@tanstack/react-query'],
+        },
+      },
+    },
+    // Reduce chunk size warnings threshold
+    chunkSizeWarningLimit: 500,
+    // Enable minification
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        drop_console: true,
+        drop_debugger: true,
+      },
+    },
   },
   server: {
     fs: {
       strict: true,
       deny: ["**/.*"],
     },
+  },
+  // Optimize dependency pre-bundling
+  optimizeDeps: {
+    include: ['react', 'react-dom', 'wouter'],
+    exclude: ['@replit/vite-plugin-cartographer', '@replit/vite-plugin-dev-banner'],
   },
 });

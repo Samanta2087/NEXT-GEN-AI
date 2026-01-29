@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import { spawn, execSync } from "child_process";
 import ffmpeg from "fluent-ffmpeg";
 import { storage } from "./storage";
 import { createJobSchema, updateJobSchema } from "@shared/schema";
@@ -84,62 +85,91 @@ async function convertToMp3(
   metadata?: { title?: string; artist?: string; album?: string }
 ): Promise<{ duration: number }> {
   return new Promise((resolve, reject) => {
-    let command = ffmpeg(inputPath);
-
-    if (trimStart !== undefined && trimStart > 0) {
-      command = command.setStartTime(trimStart);
-    }
-
-    if (trimEnd !== undefined && trimStart !== undefined) {
-      command = command.setDuration(trimEnd - trimStart);
-    } else if (trimEnd !== undefined) {
-      command = command.setDuration(trimEnd);
-    }
-
-    let duration = 0;
-
-    const outputOptions: string[] = [];
+    const args: string[] = ['-i', inputPath];
     
+    // Add trim options
+    if (trimStart !== undefined && trimStart > 0) {
+      args.push('-ss', trimStart.toString());
+    }
+    if (trimEnd !== undefined && trimStart !== undefined) {
+      args.push('-t', (trimEnd - trimStart).toString());
+    } else if (trimEnd !== undefined) {
+      args.push('-t', trimEnd.toString());
+    }
+    
+    // Audio settings
+    args.push('-vn'); // No video
+    args.push('-acodec', 'libmp3lame');
+    args.push('-ab', `${bitrate}k`);
+    args.push('-ac', '2');
+    args.push('-ar', '44100');
+    
+    // Metadata
     if (metadata?.title) {
-      outputOptions.push(`-metadata`, `title=${metadata.title}`);
+      args.push('-metadata', `title=${metadata.title}`);
     }
     if (metadata?.artist) {
-      outputOptions.push(`-metadata`, `artist=${metadata.artist}`);
+      args.push('-metadata', `artist=${metadata.artist}`);
     }
     if (metadata?.album) {
-      outputOptions.push(`-metadata`, `album=${metadata.album}`);
+      args.push('-metadata', `album=${metadata.album}`);
     }
-
-    command
-      .noVideo()
-      .audioCodec("libmp3lame")
-      .audioBitrate(bitrate)
-      .audioChannels(2)
-      .audioFrequency(44100)
-      .outputOptions(outputOptions)
-      .on("codecData", (data) => {
-        const durationStr = data.duration;
-        if (durationStr) {
-          const parts = durationStr.split(":");
-          if (parts.length === 3) {
-            duration = 
-              parseFloat(parts[0]) * 3600 +
-              parseFloat(parts[1]) * 60 +
-              parseFloat(parts[2]);
-          }
-        }
-      })
-      .on("progress", (progress) => {
-        const percent = Math.min(Math.round(progress.percent || 0), 99);
+    
+    // Overwrite output
+    args.push('-y');
+    args.push(outputPath);
+    
+    console.log('FFmpeg command: ffmpeg', args.join(' '));
+    
+    const ffmpegProcess = spawn('ffmpeg', args, {
+      windowsVerbatimArguments: false,
+      shell: false
+    });
+    
+    let duration = 0;
+    let stderrData = '';
+    
+    ffmpegProcess.stderr.on('data', (data: Buffer) => {
+      const output = data.toString();
+      stderrData += output;
+      
+      // Parse duration from FFmpeg output
+      const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
+      if (durationMatch) {
+        duration = parseInt(durationMatch[1]) * 3600 + 
+                   parseInt(durationMatch[2]) * 60 + 
+                   parseInt(durationMatch[3]);
+      }
+      
+      // Parse progress
+      const timeMatch = output.match(/time=(\d{2}):(\d{2}):(\d{2})/);
+      if (timeMatch && duration > 0) {
+        const currentTime = parseInt(timeMatch[1]) * 3600 + 
+                           parseInt(timeMatch[2]) * 60 + 
+                           parseInt(timeMatch[3]);
+        const percent = Math.min(Math.round((currentTime / duration) * 100), 99);
         broadcastProgress(jobId, percent);
-      })
-      .on("end", () => {
+      }
+    });
+    
+    ffmpegProcess.on('close', (code: number | null) => {
+      if (code === 0) {
         resolve({ duration });
-      })
-      .on("error", (err) => {
-        reject(new Error(`FFmpeg error: ${err.message}`));
-      })
-      .save(outputPath);
+      } else {
+        console.error('FFmpeg stderr:', stderrData);
+        // Check for common errors and provide better messages
+        if (stderrData.includes('does not contain any stream') || 
+            stderrData.includes('Output file #0 does not contain any stream')) {
+          reject(new Error('The input video does not contain an audio track. Cannot convert to MP3.'));
+        } else {
+          reject(new Error(`FFmpeg exited with code ${code}: ${stderrData.slice(-500)}`));
+        }
+      }
+    });
+    
+    ffmpegProcess.on('error', (err: Error) => {
+      reject(new Error(`Failed to start FFmpeg: ${err.message}`));
+    });
   });
 }
 
@@ -788,7 +818,15 @@ export async function registerRoutes(
       imageJobs.set(jobId, job);
       
       const inputPath = path.join(IMAGE_UPLOAD_DIR, job.fileName);
-      const outputFormat = settings.outputFormat || "jpg";
+      // Determine output format based on operation
+      let outputFormat: string;
+      if (operation === "remove-bg") {
+        outputFormat = "png"; // Required for transparency
+      } else if (operation === "to-pdf") {
+        outputFormat = "pdf"; // PDF output
+      } else {
+        outputFormat = settings.outputFormat || "jpg";
+      }
       const outputPath = imageProcessor.getOutputPath(jobId, outputFormat);
       
       const result = await imageProcessor.processImage(
@@ -933,7 +971,9 @@ export async function registerRoutes(
 
   app.post("/api/pdf/merge", async (req, res) => {
     try {
-      const { jobIds, outputJobId } = req.body;
+      const { jobIds } = req.body;
+      // Generate outputJobId if not provided
+      const outputJobId = req.body.outputJobId || `pdf_merge_${Date.now()}`;
       
       const inputPaths = jobIds.map((id: string) => {
         const job = pdfJobs.get(id);
@@ -975,7 +1015,8 @@ export async function registerRoutes(
 
   app.post("/api/pdf/split", async (req, res) => {
     try {
-      const { jobId, pageRanges, outputJobId } = req.body;
+      const { jobId, ranges } = req.body;
+      const outputJobId = req.body.outputJobId || `pdf_split_${Date.now()}`;
       
       const job = pdfJobs.get(jobId);
       if (!job) {
@@ -989,6 +1030,30 @@ export async function registerRoutes(
         fs.mkdirSync(outputDir, { recursive: true });
       }
       
+      // Parse page ranges - convert to arrays of page numbers for pdfProcessor
+      let pageRanges: number[][];
+      if (ranges === "all") {
+        // Split each page individually
+        pageRanges = Array.from({ length: job.pageCount }, (_, i) => [i + 1]);
+      } else if (typeof ranges === "string") {
+        // Parse range string like "1-3,5,7-10"
+        pageRanges = ranges.split(",").map((r: string) => {
+          const parts = r.trim().split("-");
+          if (parts.length === 1) {
+            const page = parseInt(parts[0]);
+            return [page];
+          }
+          const start = parseInt(parts[0]);
+          const end = parseInt(parts[1]);
+          return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+        });
+      } else if (Array.isArray(ranges)) {
+        pageRanges = ranges;
+      } else {
+        // Default: all pages as one range
+        pageRanges = [Array.from({ length: job.pageCount }, (_, i) => i + 1)];
+      }
+      
       const result = await pdfProcessor.splitPdf(
         inputPath,
         outputDir,
@@ -996,7 +1061,26 @@ export async function registerRoutes(
         (progress) => broadcastPdfProgress(outputJobId, progress)
       );
       
-      res.json({ outputs: result.outputs });
+      // Create job for the first output (for download)
+      const outputJob: PdfJob = {
+        id: outputJobId,
+        fileName: result.outputs[0]?.fileName || `${outputJobId}.pdf`,
+        originalName: `${job.originalName.replace('.pdf', '')}_split.zip`,
+        fileSize: result.outputs.reduce((sum, o) => sum + (o.size || 0), 0),
+        pageCount: result.outputs.length,
+        status: "completed",
+        progress: 100,
+        operation: "split",
+        settings: { ranges },
+        outputPath: outputDir,
+        outputSize: result.outputs.reduce((sum, o) => sum + (o.size || 0), 0),
+        createdAt: Date.now(),
+        completedAt: Date.now(),
+      };
+      
+      pdfJobs.set(outputJobId, outputJob);
+      
+      res.json({ job: outputJob, outputs: result.outputs });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -1004,7 +1088,8 @@ export async function registerRoutes(
 
   app.post("/api/pdf/rotate", async (req, res) => {
     try {
-      const { jobId, pageRotations, outputJobId } = req.body;
+      const { jobId, pages, degrees } = req.body;
+      const outputJobId = req.body.outputJobId || `pdf_rotate_${Date.now()}`;
       
       const job = pdfJobs.get(jobId);
       if (!job) {
@@ -1013,6 +1098,19 @@ export async function registerRoutes(
       
       const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
       const outputPath = pdfProcessor.getOutputPath(outputJobId);
+      
+      // Convert simplified params to pageRotations format
+      let pageRotations: Array<{page: number; degrees: number}>;
+      if (pages === "all") {
+        pageRotations = Array.from({ length: job.pageCount }, (_, i) => ({
+          page: i + 1,
+          degrees: degrees || 90
+        }));
+      } else if (Array.isArray(pages)) {
+        pageRotations = pages.map((p: number) => ({ page: p, degrees: degrees || 90 }));
+      } else {
+        pageRotations = req.body.pageRotations || [{ page: 1, degrees: 90 }];
+      }
       
       const result = await pdfProcessor.rotatePdfPages(
         inputPath,
@@ -1024,13 +1122,13 @@ export async function registerRoutes(
       const outputJob: PdfJob = {
         id: outputJobId,
         fileName: `${outputJobId}.pdf`,
-        originalName: job.originalName,
+        originalName: `${job.originalName.replace('.pdf', '')}_rotated.pdf`,
         fileSize: result.outputSize,
         pageCount: job.pageCount,
         status: "completed",
         progress: 100,
         operation: "rotate",
-        settings: { pages: pageRotations.map((p: any) => p.page) },
+        settings: { pages, degrees },
         outputPath: result.outputPath,
         outputSize: result.outputSize,
         createdAt: Date.now(),
@@ -1047,7 +1145,8 @@ export async function registerRoutes(
 
   app.post("/api/pdf/delete-pages", async (req, res) => {
     try {
-      const { jobId, pages, outputJobId } = req.body;
+      const { jobId, pages } = req.body;
+      const outputJobId = req.body.outputJobId || `pdf_delete_${Date.now()}`;
       
       const job = pdfJobs.get(jobId);
       if (!job) {
@@ -1057,23 +1156,26 @@ export async function registerRoutes(
       const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
       const outputPath = pdfProcessor.getOutputPath(outputJobId);
       
+      // Ensure pages is an array
+      const pagesToDelete = Array.isArray(pages) ? pages : [pages];
+      
       const result = await pdfProcessor.deletePdfPages(
         inputPath,
         outputPath,
-        pages,
+        pagesToDelete,
         (progress) => broadcastPdfProgress(outputJobId, progress)
       );
       
       const outputJob: PdfJob = {
         id: outputJobId,
         fileName: `${outputJobId}.pdf`,
-        originalName: job.originalName,
+        originalName: `${job.originalName.replace('.pdf', '')}_edited.pdf`,
         fileSize: result.outputSize,
         pageCount: result.pageCount,
         status: "completed",
         progress: 100,
         operation: "delete-pages",
-        settings: { pages },
+        settings: { pages: pagesToDelete },
         outputPath: result.outputPath,
         outputSize: result.outputSize,
         createdAt: Date.now(),
@@ -1090,7 +1192,8 @@ export async function registerRoutes(
 
   app.post("/api/pdf/reorder", async (req, res) => {
     try {
-      const { jobId, newOrder, outputJobId } = req.body;
+      const { jobId, newOrder } = req.body;
+      const outputJobId = req.body.outputJobId || `pdf_reorder_${Date.now()}`;
       
       const job = pdfJobs.get(jobId);
       if (!job) {
@@ -1100,23 +1203,26 @@ export async function registerRoutes(
       const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
       const outputPath = pdfProcessor.getOutputPath(outputJobId);
       
+      // If no order provided, just return the same order
+      const order = newOrder || Array.from({ length: job.pageCount }, (_, i) => i + 1);
+      
       const result = await pdfProcessor.reorderPdfPages(
         inputPath,
         outputPath,
-        newOrder,
+        order,
         (progress) => broadcastPdfProgress(outputJobId, progress)
       );
       
       const outputJob: PdfJob = {
         id: outputJobId,
         fileName: `${outputJobId}.pdf`,
-        originalName: job.originalName,
+        originalName: `${job.originalName.replace('.pdf', '')}_reordered.pdf`,
         fileSize: result.outputSize,
-        pageCount: newOrder.length,
+        pageCount: order.length,
         status: "completed",
         progress: 100,
         operation: "reorder",
-        settings: { pageOrder: newOrder },
+        settings: { pageOrder: order },
         outputPath: result.outputPath,
         outputSize: result.outputSize,
         createdAt: Date.now(),
@@ -1126,6 +1232,103 @@ export async function registerRoutes(
       pdfJobs.set(outputJobId, outputJob);
       
       res.json({ job: outputJob });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+  
+  // PDF Compress
+  app.post("/api/pdf/compress", async (req, res) => {
+    try {
+      const { jobId, level } = req.body;
+      const outputJobId = req.body.outputJobId || `pdf_compress_${Date.now()}`;
+      
+      const job = pdfJobs.get(jobId);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
+      const outputPath = pdfProcessor.getOutputPath(outputJobId);
+      
+      // For now, just copy the file (pdf-lib doesn't have built-in compression)
+      // Real compression would need Ghostscript or similar
+      const result = await pdfProcessor.compressPdf(
+        inputPath,
+        outputPath,
+        level || "medium",
+        (progress) => broadcastPdfProgress(outputJobId, progress)
+      );
+      
+      const outputJob: PdfJob = {
+        id: outputJobId,
+        fileName: `${outputJobId}.pdf`,
+        originalName: `${job.originalName.replace('.pdf', '')}_compressed.pdf`,
+        fileSize: result.outputSize,
+        pageCount: job.pageCount,
+        status: "completed",
+        progress: 100,
+        operation: "compress",
+        settings: { level },
+        outputPath: result.outputPath,
+        outputSize: result.outputSize,
+        createdAt: Date.now(),
+        completedAt: Date.now(),
+      };
+      
+      pdfJobs.set(outputJobId, outputJob);
+      
+      res.json({ job: outputJob });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+  
+  // PDF to Images
+  app.post("/api/pdf/to-images", async (req, res) => {
+    try {
+      const { jobId, format } = req.body;
+      const outputJobId = req.body.outputJobId || `pdf_images_${Date.now()}`;
+      
+      const job = pdfJobs.get(jobId);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
+      const outputDir = path.join(process.cwd(), "output", "pdfs", outputJobId);
+      
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+      
+      const result = await pdfProcessor.pdfToImages(
+        inputPath,
+        outputDir,
+        format || "png",
+        85, // quality
+        (progress) => broadcastPdfProgress(outputJobId, progress)
+      );
+      
+      const outputJob: PdfJob = {
+        id: outputJobId,
+        fileName: result.outputs[0]?.fileName || `${outputJobId}.${format || 'png'}`,
+        originalName: `${job.originalName.replace('.pdf', '')}_images.zip`,
+        fileSize: result.outputs.reduce((sum, o) => sum + (o.size || 0), 0),
+        pageCount: result.outputs.length,
+        status: "completed",
+        progress: 100,
+        operation: "to-images",
+        settings: { format },
+        outputPath: outputDir,
+        outputSize: result.outputs.reduce((sum, o) => sum + (o.size || 0), 0),
+        createdAt: Date.now(),
+        completedAt: Date.now(),
+      };
+      
+      pdfJobs.set(outputJobId, outputJob);
+      
+      res.json({ job: outputJob, outputs: result.outputs });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -1140,7 +1343,33 @@ export async function registerRoutes(
       
       const filename = job.originalName || "document.pdf";
       
-      res.download(job.outputPath, filename);
+      // Check if outputPath is a directory (for split/to-images operations)
+      const stats = fs.statSync(job.outputPath);
+      
+      if (stats.isDirectory()) {
+        // Check how many files are in the directory
+        const files = fs.readdirSync(job.outputPath);
+        
+        if (files.length === 1) {
+          // Single file - download directly without zipping
+          const singleFilePath = path.join(job.outputPath, files[0]);
+          const singleFileName = files[0];
+          res.download(singleFilePath, singleFileName);
+        } else {
+          // Multiple files - create a zip
+          const archiver = await import('archiver');
+          const archive = archiver.default('zip', { zlib: { level: 9 } });
+          
+          res.setHeader('Content-Type', 'application/zip');
+          res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\.[^.]+$/, '.zip')}"`);
+          
+          archive.pipe(res);
+          archive.directory(job.outputPath, false);
+          await archive.finalize();
+        }
+      } else {
+        res.download(job.outputPath, filename);
+      }
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

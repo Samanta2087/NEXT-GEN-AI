@@ -162,6 +162,17 @@ interface DownloadOptions {
 export async function downloadMedia(options: DownloadOptions): Promise<{ outputPath: string; fileSize: number }> {
   const { jobId, url, mode, formatId, resolution, audioFormat, audioBitrate, metadata, onProgress } = options;
   
+  console.log(`[yt-dlp] ============================================`);
+  console.log(`[yt-dlp] Download started`);
+  console.log(`[yt-dlp] jobId: ${jobId}`);
+  console.log(`[yt-dlp] url: ${url}`);
+  console.log(`[yt-dlp] mode: ${mode}`);
+  console.log(`[yt-dlp] resolution: ${resolution}`);
+  console.log(`[yt-dlp] formatId: ${formatId}`);
+  console.log(`[yt-dlp] audioFormat: ${audioFormat}`);
+  console.log(`[yt-dlp] audioBitrate: ${audioBitrate}`);
+  console.log(`[yt-dlp] ============================================`);
+  
   const ext = mode === "audio" ? (audioFormat || "mp3") : "mp4";
   const outputTemplate = path.join(DOWNLOAD_DIR, `${jobId}.%(ext)s`);
   const finalPath = path.join(DOWNLOAD_DIR, `${jobId}.${ext}`);
@@ -174,6 +185,8 @@ export async function downloadMedia(options: DownloadOptions): Promise<{ outputP
   ];
 
   if (mode === "audio") {
+    // Use combined formats (like 18, 93) and extract audio - audio-only formats often get 403 errors
+    args.push("-f", "18/93/bestaudio[ext=m4a]/bestaudio/best");
     args.push("-x");
     args.push("--audio-format", audioFormat || "mp3");
     if (audioBitrate) {
@@ -185,24 +198,48 @@ export async function downloadMedia(options: DownloadOptions): Promise<{ outputP
       if (metadata.artist) args.push("--parse-metadata", `artist:${metadata.artist}`);
     }
   } else {
+    // For video, prefer direct download formats (18) over HLS streams (91-96) which get 403 errors
+    // Format 18 is 360p MP4 with audio - most reliable format
     if (formatId) {
       args.push("-f", formatId);
     } else if (resolution) {
-      args.push("-f", `bestvideo[height<=${resolution.replace("p", "")}]+bestaudio/best[height<=${resolution.replace("p", "")}]/best`);
+      const height = resolution.replace("p", "");
+      // Prefer direct download formats, avoid HLS (91-96) which get fragment 403 errors
+      if (height === "1080") {
+        // For 1080p, try merging video+audio since no combined 1080p direct format exists
+        args.push("-f", "137+140/best[height<=1080][ext=mp4]/18/best");
+      } else if (height === "720") {
+        args.push("-f", "136+140/best[height<=720][ext=mp4]/18/best");
+      } else if (height === "480") {
+        args.push("-f", "135+140/best[height<=480][ext=mp4]/18/best");
+      } else if (height === "360") {
+        // Format 18 is 360p with audio - most reliable
+        args.push("-f", "18/134+140/best[height<=360][ext=mp4]/best");
+      } else {
+        args.push("-f", "18/best[height<=${height}][ext=mp4]/best");
+      }
     } else {
-      args.push("-f", "bestvideo+bestaudio/best");
+      // Default: prefer format 18 (360p) which always works, or try merging
+      args.push("-f", "18/136+140/135+140/134+140/best[ext=mp4]/best");
     }
     args.push("--merge-output-format", "mp4");
   }
 
   args.push(url);
 
-  return new Promise((resolve, reject) => {
-    const process = spawn("yt-dlp", args);
-    let lastProgress = 0;
+  console.log(`[yt-dlp] Full command: yt-dlp ${args.join(" ")}`);
 
-    process.stdout.on("data", (data) => {
+  return new Promise((resolve, reject) => {
+    const ytdlpProcess = spawn("yt-dlp", args);
+    let lastProgress = 0;
+    let allOutput = "";
+
+    console.log(`[yt-dlp] Process spawned with PID: ${ytdlpProcess.pid}`);
+
+    ytdlpProcess.stdout.on("data", (data) => {
       const output = data.toString();
+      allOutput += output;
+      console.log(`[yt-dlp stdout] ${output.trim()}`);
       const lines = output.split("\n");
       
       for (const line of lines) {
@@ -221,18 +258,26 @@ export async function downloadMedia(options: DownloadOptions): Promise<{ outputP
       }
     });
 
-    process.stderr.on("data", (data) => {
-      console.error("yt-dlp stderr:", data.toString());
+    ytdlpProcess.stderr.on("data", (data) => {
+      const stderr = data.toString();
+      console.error(`[yt-dlp stderr] ${stderr.trim()}`);
+      allOutput += stderr;
     });
 
-    process.on("close", (code) => {
+    ytdlpProcess.on("close", (code) => {
+      console.log(`[yt-dlp] Process exited with code: ${code}`);
+      
       if (code !== 0) {
-        reject(new Error("Download failed"));
+        console.error(`[yt-dlp] Download failed. Full output:\n${allOutput}`);
+        reject(new Error(`Download failed with exit code ${code}`));
         return;
       }
 
       const files = fs.readdirSync(DOWNLOAD_DIR);
-      const outputFile = files.find(f => f.startsWith(jobId));
+      const outputFile = files.find(f => f.startsWith(jobId) && !f.endsWith('.part') && !f.endsWith('.ytdl'));
+      
+      console.log(`[yt-dlp] Looking for output file starting with: ${jobId}`);
+      console.log(`[yt-dlp] Files in directory: ${files.filter(f => f.startsWith(jobId)).join(', ')}`);
       
       if (!outputFile) {
         reject(new Error("Output file not found"));
@@ -242,11 +287,13 @@ export async function downloadMedia(options: DownloadOptions): Promise<{ outputP
       const outputPath = path.join(DOWNLOAD_DIR, outputFile);
       const stats = fs.statSync(outputPath);
 
+      console.log(`[yt-dlp] Download complete: ${outputFile} (${stats.size} bytes)`);
       onProgress(100, "downloading");
       resolve({ outputPath: outputFile, fileSize: stats.size });
     });
 
-    process.on("error", (err) => {
+    ytdlpProcess.on("error", (err) => {
+      console.error(`[yt-dlp] Spawn error: ${err.message}`);
       reject(new Error(`yt-dlp error: ${err.message}`));
     });
   });
