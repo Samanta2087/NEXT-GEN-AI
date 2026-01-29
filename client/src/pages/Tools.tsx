@@ -1,8 +1,8 @@
 import { useState, useCallback, useRef, memo, useMemo, DragEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { 
-  Image, 
-  FileText, 
+import {
+  Image,
+  FileText,
   ArrowLeft,
   Upload,
   Crop,
@@ -34,7 +34,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
-import { Header } from "@/components/Header";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -63,7 +62,7 @@ const TOOLS: ToolDefinition[] = [
   { id: "remove-bg", category: "image", name: "Remove BG", description: "AI background removal", icon: ImageMinus, color: "text-indigo-600", gradient: "from-indigo-500/20 to-blue-500/20" },
   { id: "to-pdf", category: "image", name: "To PDF", description: "Images to PDF", icon: FileOutput, color: "text-teal-600", gradient: "from-teal-500/20 to-cyan-500/20" },
   { id: "strip-exif", category: "image", name: "Strip EXIF", description: "Remove metadata", icon: Eye, color: "text-red-600", gradient: "from-red-500/20 to-pink-500/20" },
-  
+
   // PDF Tools
   { id: "pdf-merge", category: "pdf", name: "Merge PDFs", description: "Combine multiple PDFs", icon: Combine, color: "text-blue-600", gradient: "from-blue-500/20 to-indigo-500/20" },
   { id: "pdf-split", category: "pdf", name: "Split PDF", description: "Extract pages", icon: Scissors, color: "text-purple-600", gradient: "from-purple-500/20 to-pink-500/20" },
@@ -82,26 +81,26 @@ interface UploadedFile {
 }
 
 // Memoized Tool Card - Uses CSS transforms instead of JS animations where possible
-const ToolCard = memo(function ToolCard({ 
-  tool, 
-  index, 
+const ToolCard = memo(function ToolCard({
+  tool,
+  index,
   onSelect,
   isMobile,
   enableAnimations
-}: { 
-  tool: ToolDefinition; 
-  index: number; 
+}: {
+  tool: ToolDefinition;
+  index: number;
   onSelect: (tool: ToolDefinition) => void;
   isMobile: boolean;
   enableAnimations: boolean;
 }) {
   const Icon = tool.icon;
-  
+
   // Use CSS classes for animations on mobile for better performance
-  const animClass = enableAnimations 
-    ? 'transform transition-transform duration-150 active:scale-[0.98]' 
+  const animClass = enableAnimations
+    ? 'transform transition-transform duration-150 active:scale-[0.98]'
     : '';
-  
+
   return (
     <button
       onClick={() => onSelect(tool)}
@@ -137,11 +136,10 @@ const FileItem = memo(function FileItem({
   return (
     <button
       onClick={() => onToggle(file.id)}
-      className={`relative w-full ${isMobile ? 'p-3 min-h-[56px]' : 'p-3'} rounded-xl border-2 text-left transition-colors duration-100 ${
-        file.selected
-          ? 'border-blue-500 bg-blue-50/50'
-          : 'border-gray-200 bg-white active:bg-gray-50'
-      }`}
+      className={`relative w-full ${isMobile ? 'p-3 min-h-[56px]' : 'p-3'} rounded-xl border-2 text-left transition-colors duration-100 ${file.selected
+        ? 'border-blue-500 bg-blue-50/50'
+        : 'border-gray-200 bg-white active:bg-gray-50'
+        }`}
     >
       <div className="flex items-center gap-3">
         {file.preview && (
@@ -175,13 +173,13 @@ export default function Tools() {
   const device = useDevice();
   const animConfig = useAnimationConfig();
   const { isMobile, isTablet } = device;
-  
+
   const [view, setView] = useState<"selection" | "workspace">("selection");
   const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  
+
   // Settings
   const [outputFormat, setOutputFormat] = useState<"jpg" | "png" | "webp">("jpg");
   const [quality, setQuality] = useState(85);
@@ -195,16 +193,16 @@ export default function Tools() {
   const [flipV, setFlipV] = useState(false);
   const [pdfPagesToDelete, setPdfPagesToDelete] = useState<string>("");
   const [pdfRotateDegrees, setPdfRotateDegrees] = useState<number>(90);
-  
+
   // Processing state
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingProgress, setProcessingProgress] = useState(0);
-  
+
   // Mobile-specific state
   const [showMobileControls, setShowMobileControls] = useState(false);
-  
+
   const fileInputRef = useRef<HTMLInputElement>(null);
-  
+
   // Throttle progress on mobile for performance
   const displayProgress = useThrottledProgress(processingProgress, isMobile ? 200 : 50);
 
@@ -247,20 +245,20 @@ export default function Tools() {
 
   const handleFilesInternal = async (files: File[]) => {
     setIsUploading(true);
-    
+
     const newFiles: UploadedFile[] = files.map(file => ({
       id: Math.random().toString(36).substr(2, 9),
       file,
       preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
       selected: true,
     }));
-    
+
     setUploadedFiles(prev => [...prev, ...newFiles]);
     setIsUploading(false);
   };
 
   const toggleFileSelection = useCallback((id: string) => {
-    setUploadedFiles(prev => prev.map(f => 
+    setUploadedFiles(prev => prev.map(f =>
       f.id === id ? { ...f, selected: !f.selected } : f
     ));
   }, []);
@@ -268,35 +266,35 @@ export default function Tools() {
   // Process selected files
   const handleProcess = async () => {
     const filesToProcess = uploadedFiles.filter(f => f.selected);
-    
+
     if (filesToProcess.length === 0 || !selectedTool) {
       alert('Please select at least one file');
       return;
     }
-    
+
     setIsProcessing(true);
     setProcessingProgress(0);
-    
+
     try {
       if (selectedTool.category === "image") {
         for (let i = 0; i < filesToProcess.length; i++) {
           const fileData = filesToProcess[i];
           setProcessingProgress(Math.round((i / filesToProcess.length) * 50));
-          
+
           const formData = new FormData();
           const jobId = `job_${Date.now()}_${i}`;
           formData.append("file", fileData.file);
           formData.append("jobId", jobId);
-          
+
           const uploadResponse = await fetch("/api/image/upload", {
             method: "POST",
             body: formData,
           });
-          
+
           if (!uploadResponse.ok) throw new Error(`Failed to upload ${fileData.file.name}`);
-          
+
           const effectiveFormat = selectedTool.id === "remove-bg" ? "png" : outputFormat;
-          
+
           const settings: ImageSettings = {
             outputFormat: effectiveFormat,
             quality,
@@ -307,7 +305,7 @@ export default function Tools() {
             flipH,
             flipV,
           };
-          
+
           const processResponse = await fetch("/api/image/process", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -317,14 +315,14 @@ export default function Tools() {
               settings,
             }),
           });
-          
+
           if (!processResponse.ok) throw new Error(`Failed to process ${fileData.file.name}`);
-          
+
           const processData = await processResponse.json();
           setProcessingProgress(Math.round(((i + 1) / filesToProcess.length) * 100));
-          
+
           if (processData.job?.status === "completed") {
-            let downloadFormat = selectedTool.id === "remove-bg" ? "png" 
+            let downloadFormat = selectedTool.id === "remove-bg" ? "png"
               : selectedTool.id === "to-pdf" ? "pdf" : outputFormat;
             const link = document.createElement('a');
             link.href = `/api/image/download/${jobId}`;
@@ -336,40 +334,40 @@ export default function Tools() {
         }
       } else if (selectedTool.category === "pdf") {
         const pdfFiles = filesToProcess;
-        
+
         if (selectedTool.id === "pdf-merge") {
           const jobIds: string[] = [];
-          
+
           for (let i = 0; i < pdfFiles.length; i++) {
             const fileData = pdfFiles[i];
             const jobId = `pdf_${Date.now()}_${i}`;
-            
+
             const formData = new FormData();
             formData.append("file", fileData.file);
             formData.append("jobId", jobId);
-            
+
             const uploadResponse = await fetch("/api/pdf/upload", {
               method: "POST",
               body: formData,
             });
-            
+
             if (!uploadResponse.ok) throw new Error(`Failed to upload ${fileData.file.name}`);
-            
+
             jobIds.push(jobId);
             setProcessingProgress(Math.round((i / pdfFiles.length) * 50));
           }
-          
+
           const mergeResponse = await fetch("/api/pdf/merge", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ jobIds }),
           });
-          
+
           if (!mergeResponse.ok) throw new Error("Failed to merge PDFs");
-          
+
           const mergeData = await mergeResponse.json();
           setProcessingProgress(100);
-          
+
           if (mergeData.job?.status === "completed") {
             const link = document.createElement('a');
             link.href = `/api/pdf/download/${mergeData.job.id}`;
@@ -381,23 +379,23 @@ export default function Tools() {
         } else {
           const fileData = pdfFiles[0];
           const jobId = `pdf_${Date.now()}`;
-          
+
           const formData = new FormData();
           formData.append("file", fileData.file);
           formData.append("jobId", jobId);
-          
+
           const uploadResponse = await fetch("/api/pdf/upload", {
             method: "POST",
             body: formData,
           });
-          
+
           if (!uploadResponse.ok) throw new Error(`Failed to upload ${fileData.file.name}`);
-          
+
           setProcessingProgress(50);
-          
+
           let endpoint = "/api/pdf/";
           const body: Record<string, unknown> = { jobId };
-          
+
           switch (selectedTool.id) {
             case "pdf-split":
               endpoint += "split";
@@ -440,21 +438,21 @@ export default function Tools() {
             default:
               throw new Error(`Unsupported PDF operation: ${selectedTool.id}`);
           }
-          
+
           const processResponse = await fetch(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
           });
-          
+
           if (!processResponse.ok) {
             const errData = await processResponse.json().catch(() => ({}));
             throw new Error(errData.message || "Failed to process PDF");
           }
-          
+
           const processData = await processResponse.json();
           setProcessingProgress(100);
-          
+
           if (processData.job?.status === "completed") {
             const link = document.createElement('a');
             link.href = `/api/pdf/download/${processData.job.id}`;
@@ -465,7 +463,7 @@ export default function Tools() {
           }
         }
       }
-      
+
       alert("✅ Processing complete!");
       setUploadedFiles(prev => prev.map(f => ({ ...f, selected: false })));
     } catch (error: any) {
@@ -486,8 +484,7 @@ export default function Tools() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100">
-      <Header />
-      
+
       {view === "selection" ? (
         <div className={`container mx-auto ${isMobile ? 'px-4 py-6' : 'px-6 py-10'}`}>
           <div className="max-w-5xl mx-auto">
@@ -510,7 +507,7 @@ export default function Tools() {
                 <h2 className={`${isMobile ? 'text-lg' : 'text-xl'} font-bold text-gray-900`}>Image Tools</h2>
                 <Badge variant="secondary" className="ml-auto text-xs px-2">8</Badge>
               </div>
-              
+
               <div className={`grid ${isMobile ? 'grid-cols-1 gap-2' : isTablet ? 'grid-cols-2 gap-3' : 'grid-cols-4 gap-3'}`}>
                 {imageTools.map((tool, index) => (
                   <ToolCard
@@ -534,7 +531,7 @@ export default function Tools() {
                 <h2 className={`${isMobile ? 'text-lg' : 'text-xl'} font-bold text-gray-900`}>PDF Tools</h2>
                 <Badge variant="secondary" className="ml-auto text-xs px-2">7</Badge>
               </div>
-              
+
               <div className={`grid ${isMobile ? 'grid-cols-1 gap-2' : isTablet ? 'grid-cols-2 gap-3' : 'grid-cols-4 gap-3'}`}>
                 {pdfTools.map((tool, index) => (
                   <ToolCard
@@ -564,7 +561,7 @@ export default function Tools() {
                 >
                   <ArrowLeft className="w-5 h-5" />
                 </Button>
-                
+
                 {selectedTool && (
                   <div className="flex items-center gap-2">
                     <div className={`p-1.5 rounded-lg bg-gradient-to-br ${selectedTool.gradient}`}>
@@ -574,14 +571,14 @@ export default function Tools() {
                   </div>
                 )}
               </div>
-              
+
               <div className="flex items-center gap-2">
                 {selectedCount > 0 && (
                   <Badge variant="secondary" className="px-2 py-0.5 text-xs">
                     {selectedCount}
                   </Badge>
                 )}
-                
+
                 {/* Mobile: Settings toggle */}
                 {isMobile && (
                   <Button
@@ -593,7 +590,7 @@ export default function Tools() {
                     {showMobileControls ? <X className="w-4 h-4" /> : <Settings2 className="w-4 h-4" />}
                   </Button>
                 )}
-                
+
                 <Button
                   disabled={selectedCount === 0 || isProcessing}
                   onClick={handleProcess}
@@ -642,7 +639,7 @@ export default function Tools() {
           {/* Main Content Area */}
           <div className={`flex-1 ${isMobile ? 'p-3' : 'p-6'}`}>
             <div className={`max-w-7xl mx-auto h-full ${!isMobile ? 'grid grid-cols-12 gap-5' : ''}`}>
-              
+
               {/* File Upload Area */}
               <div className={isMobile ? 'mb-4' : 'col-span-5'}>
                 <Card className="bg-white/90 border border-gray-200">
@@ -655,7 +652,7 @@ export default function Tools() {
                       <span className="text-xs text-gray-500">{uploadedFiles.length} loaded</span>
                     </div>
                   </div>
-                  
+
                   <div className={`${isMobile ? 'p-3' : 'p-4'} ${isMobile ? 'max-h-48' : 'max-h-[55vh]'} overflow-y-auto`}>
                     {uploadedFiles.length === 0 ? (
                       <button
@@ -663,9 +660,8 @@ export default function Tools() {
                         onDragLeave={handleDragLeave}
                         onDrop={handleDrop}
                         onClick={() => fileInputRef.current?.click()}
-                        className={`w-full ${isMobile ? 'py-10' : 'py-16'} rounded-xl border-2 border-dashed transition-colors ${
-                          isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 active:bg-gray-50'
-                        }`}
+                        className={`w-full ${isMobile ? 'py-10' : 'py-16'} rounded-xl border-2 border-dashed transition-colors ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 active:bg-gray-50'
+                          }`}
                       >
                         <div className="flex flex-col items-center">
                           <Upload className={`${isMobile ? 'w-10 h-10' : 'w-12 h-12'} text-gray-400 mb-3`} />
@@ -685,7 +681,7 @@ export default function Tools() {
                             isMobile={isMobile}
                           />
                         ))}
-                        
+
                         <Button
                           variant="outline"
                           size="sm"
@@ -700,7 +696,7 @@ export default function Tools() {
                   </div>
                 </Card>
               </div>
-              
+
               {/* Desktop Controls Panel */}
               {!isMobile && (
                 <div className="col-span-7">
@@ -711,7 +707,7 @@ export default function Tools() {
                         Settings
                       </h3>
                     </div>
-                    
+
                     <div className="p-4 overflow-y-auto max-h-[55vh]">
                       <DesktopControls
                         tool={selectedTool!}
@@ -746,7 +742,7 @@ export default function Tools() {
               )}
             </div>
           </div>
-          
+
           <input
             ref={fileInputRef}
             type="file"
@@ -816,7 +812,7 @@ function MobileControls({
           </div>
         </div>
       )}
-      
+
       {/* Quality Slider */}
       {(tool.id === "compress" || tool.id === "convert") && (
         <div>
@@ -833,7 +829,7 @@ function MobileControls({
           />
         </div>
       )}
-      
+
       {/* Rotate Controls */}
       {tool.id === "rotate" && (
         <div className="grid grid-cols-4 gap-2">
@@ -871,7 +867,7 @@ function MobileControls({
           </Button>
         </div>
       )}
-      
+
       {/* PDF Delete Pages */}
       {tool.id === "delete-pages" && (
         <div>
@@ -884,7 +880,7 @@ function MobileControls({
           />
         </div>
       )}
-      
+
       {/* PDF Rotate */}
       {tool.id === "pdf-rotate" && (
         <div className="grid grid-cols-3 gap-2">
@@ -989,17 +985,16 @@ function DesktopControls({
           </div>
         </div>
       )}
-      
+
       {/* Quality Slider */}
       {(tool.id === "compress" || tool.id === "convert") && (
         <div>
           <div className="flex items-center justify-between mb-2">
             <Label className="text-sm font-semibold text-gray-700">Quality</Label>
-            <Badge variant="secondary" className={`font-mono text-xs ${
-              quality < 50 ? 'bg-red-100 text-red-700' : 
-              quality < 75 ? 'bg-yellow-100 text-yellow-700' : 
-              'bg-green-100 text-green-700'
-            }`}>
+            <Badge variant="secondary" className={`font-mono text-xs ${quality < 50 ? 'bg-red-100 text-red-700' :
+              quality < 75 ? 'bg-yellow-100 text-yellow-700' :
+                'bg-green-100 text-green-700'
+              }`}>
               {quality}%
             </Badge>
           </div>
@@ -1012,7 +1007,7 @@ function DesktopControls({
           />
         </div>
       )}
-      
+
       {/* Resize Dimensions */}
       {tool.id === "resize" && (
         <div className="space-y-4">
@@ -1036,9 +1031,9 @@ function DesktopControls({
               ))}
             </div>
           </div>
-          
+
           <Separator />
-          
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs text-gray-500 mb-1 block">Width (px)</Label>
@@ -1061,14 +1056,14 @@ function DesktopControls({
               />
             </div>
           </div>
-          
+
           <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border border-gray-200">
             <Label className="text-sm font-medium text-gray-700">Lock Aspect Ratio</Label>
             <Switch checked={maintainAspect} onCheckedChange={setMaintainAspect} />
           </div>
         </div>
       )}
-      
+
       {/* Rotate Settings */}
       {tool.id === "rotate" && (
         <div className="space-y-3">
@@ -1111,7 +1106,7 @@ function DesktopControls({
           </div>
         </div>
       )}
-      
+
       {/* PDF Delete Pages */}
       {tool.id === "delete-pages" && (
         <div className="p-4 rounded-xl bg-gradient-to-br from-red-50 to-orange-50 border border-red-200">
@@ -1129,7 +1124,7 @@ function DesktopControls({
           </p>
         </div>
       )}
-      
+
       {/* PDF Rotate */}
       {tool.id === "pdf-rotate" && (
         <div>
@@ -1151,9 +1146,9 @@ function DesktopControls({
           </div>
         </div>
       )}
-      
+
       <Separator />
-      
+
       {/* Auto Optimize */}
       <div className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-br from-blue-50 to-purple-50 border border-blue-200">
         <div className="flex items-center gap-2">
@@ -1167,7 +1162,7 @@ function DesktopControls({
         </div>
         <Switch checked={autoOptimize} onCheckedChange={setAutoOptimize} />
       </div>
-      
+
       {/* Info */}
       <div className="p-3 rounded-xl bg-gray-50 border border-gray-200">
         <div className="flex items-start gap-2">

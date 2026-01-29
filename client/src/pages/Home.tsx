@@ -70,7 +70,7 @@ export default function Home() {
       </AnimatePresence>
 
       <div className="relative z-10 container mx-auto px-4 py-6 max-w-5xl">
-        <Header />
+        <Header showDownloaderLink={false} />
 
         <main className="space-y-8 pb-20">
           <motion.section
@@ -196,7 +196,7 @@ export default function Home() {
                     Supported Formats
                   </h3>
                   <p className="text-muted-foreground">
-                    Drop any video file above to extract high-quality MP3 audio. 
+                    Drop any video file above to extract high-quality MP3 audio.
                     Batch conversion supported.
                   </p>
                 </div>

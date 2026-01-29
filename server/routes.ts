@@ -12,6 +12,7 @@ import { analyzeUrl, downloadMedia, getDownloadPath, cleanupDownload, getAvailab
 import type { DownloadJob, MediaInfo, ImageJob, PdfJob, ImageSettings, PdfSettings } from "@shared/schema";
 import * as imageProcessor from "./imageProcessor";
 import * as pdfProcessor from "./pdfProcessor";
+import { uploadLimiter, downloadLimiter, analyzeLimiter, conversionLimiter } from "./security";
 
 const UPLOAD_DIR = path.join(process.cwd(), "uploads");
 const OUTPUT_DIR = path.join(process.cwd(), "output");
@@ -86,7 +87,7 @@ async function convertToMp3(
 ): Promise<{ duration: number }> {
   return new Promise((resolve, reject) => {
     const args: string[] = ['-i', inputPath];
-    
+
     // Add trim options
     if (trimStart !== undefined && trimStart > 0) {
       args.push('-ss', trimStart.toString());
@@ -96,14 +97,14 @@ async function convertToMp3(
     } else if (trimEnd !== undefined) {
       args.push('-t', trimEnd.toString());
     }
-    
+
     // Audio settings
     args.push('-vn'); // No video
     args.push('-acodec', 'libmp3lame');
     args.push('-ab', `${bitrate}k`);
     args.push('-ac', '2');
     args.push('-ar', '44100');
-    
+
     // Metadata
     if (metadata?.title) {
       args.push('-metadata', `title=${metadata.title}`);
@@ -114,59 +115,59 @@ async function convertToMp3(
     if (metadata?.album) {
       args.push('-metadata', `album=${metadata.album}`);
     }
-    
+
     // Overwrite output
     args.push('-y');
     args.push(outputPath);
-    
+
     console.log('FFmpeg command: ffmpeg', args.join(' '));
-    
+
     const ffmpegProcess = spawn('ffmpeg', args, {
       windowsVerbatimArguments: false,
       shell: false
     });
-    
+
     let duration = 0;
     let stderrData = '';
-    
+
     ffmpegProcess.stderr.on('data', (data: Buffer) => {
       const output = data.toString();
       stderrData += output;
-      
+
       // Parse duration from FFmpeg output
       const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
       if (durationMatch) {
-        duration = parseInt(durationMatch[1]) * 3600 + 
-                   parseInt(durationMatch[2]) * 60 + 
-                   parseInt(durationMatch[3]);
+        duration = parseInt(durationMatch[1]) * 3600 +
+          parseInt(durationMatch[2]) * 60 +
+          parseInt(durationMatch[3]);
       }
-      
+
       // Parse progress
       const timeMatch = output.match(/time=(\d{2}):(\d{2}):(\d{2})/);
       if (timeMatch && duration > 0) {
-        const currentTime = parseInt(timeMatch[1]) * 3600 + 
-                           parseInt(timeMatch[2]) * 60 + 
-                           parseInt(timeMatch[3]);
+        const currentTime = parseInt(timeMatch[1]) * 3600 +
+          parseInt(timeMatch[2]) * 60 +
+          parseInt(timeMatch[3]);
         const percent = Math.min(Math.round((currentTime / duration) * 100), 99);
         broadcastProgress(jobId, percent);
       }
     });
-    
+
     ffmpegProcess.on('close', (code: number | null) => {
       if (code === 0) {
         resolve({ duration });
       } else {
         console.error('FFmpeg stderr:', stderrData);
         // Check for common errors and provide better messages
-        if (stderrData.includes('does not contain any stream') || 
-            stderrData.includes('Output file #0 does not contain any stream')) {
+        if (stderrData.includes('does not contain any stream') ||
+          stderrData.includes('Output file #0 does not contain any stream')) {
           reject(new Error('The input video does not contain an audio track. Cannot convert to MP3.'));
         } else {
           reject(new Error(`FFmpeg exited with code ${code}: ${stderrData.slice(-500)}`));
         }
       }
     });
-    
+
     ffmpegProcess.on('error', (err: Error) => {
       reject(new Error(`Failed to start FFmpeg: ${err.message}`));
     });
@@ -199,7 +200,7 @@ export async function registerRoutes(
       }
 
       const { jobId, bitrate } = req.body;
-      
+
       if (!jobId || !bitrate) {
         return res.status(400).json({ message: "Missing jobId or bitrate" });
       }
@@ -214,8 +215,8 @@ export async function registerRoutes(
         inputPath: inputPath,
       });
 
-      res.json({ 
-        success: true, 
+      res.json({
+        success: true,
         jobId,
         fileName: req.file.filename,
         originalName: req.file.originalname,
@@ -258,7 +259,7 @@ export async function registerRoutes(
       }
 
       const job = await storage.getJob(jobId) as any;
-      
+
       if (!job) {
         return res.status(404).json({ message: "Job not found" });
       }
@@ -342,7 +343,7 @@ export async function registerRoutes(
 
       res.setHeader("Content-Type", "audio/mpeg");
       res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(downloadName)}"`);
-      
+
       const stream = fs.createReadStream(filePath);
       stream.pipe(res);
     } catch (error: any) {
@@ -416,14 +417,14 @@ export async function registerRoutes(
   app.delete("/api/jobs/:id", async (req, res) => {
     try {
       const job = await storage.getJob(req.params.id) as any;
-      
+
       if (job?.inputPath && fs.existsSync(job.inputPath)) {
-        try { fs.unlinkSync(job.inputPath); } catch (e) {}
+        try { fs.unlinkSync(job.inputPath); } catch (e) { }
       }
-      
+
       const outputPath = path.join(OUTPUT_DIR, `${req.params.id}.mp3`);
       if (fs.existsSync(outputPath)) {
-        try { fs.unlinkSync(outputPath); } catch (e) {}
+        try { fs.unlinkSync(outputPath); } catch (e) { }
       }
 
       const deleted = await storage.deleteJob(req.params.id);
@@ -452,16 +453,16 @@ export async function registerRoutes(
   app.post("/api/social/analyze", async (req, res) => {
     try {
       const { url } = req.body;
-      
+
       if (!url) {
         return res.status(400).json({ message: "URL is required" });
       }
 
       const mediaInfo = await analyzeUrl(url);
       const resolutions = getAvailableResolutions(mediaInfo.formats);
-      
-      res.json({ 
-        success: true, 
+
+      res.json({
+        success: true,
         mediaInfo,
         availableResolutions: resolutions,
       });
@@ -473,21 +474,21 @@ export async function registerRoutes(
 
   app.post("/api/social/download", async (req, res) => {
     try {
-      const { 
-        jobId, 
-        url, 
+      const {
+        jobId,
+        url,
         platform,
         title,
         thumbnail,
         duration,
-        mode, 
-        formatId, 
-        resolution, 
-        audioFormat, 
+        mode,
+        formatId,
+        resolution,
+        audioFormat,
         audioBitrate,
-        metadata 
+        metadata
       } = req.body;
-      
+
       if (!jobId || !url || !mode) {
         return res.status(400).json({ message: "Missing required fields" });
       }
@@ -583,20 +584,20 @@ export async function registerRoutes(
       }
 
       const filePath = getDownloadPath(job.outputPath);
-      
+
       if (!fs.existsSync(filePath)) {
         return res.status(404).json({ message: "File not found" });
       }
 
       const ext = path.extname(job.outputPath);
       const downloadName = job.title.replace(/[<>:"/\\|?*]/g, "_") + ext;
-      const contentType = ext === ".mp3" ? "audio/mpeg" : 
-                          ext === ".m4a" ? "audio/mp4" :
-                          ext === ".mp4" ? "video/mp4" : "application/octet-stream";
+      const contentType = ext === ".mp3" ? "audio/mpeg" :
+        ext === ".m4a" ? "audio/mp4" :
+          ext === ".mp4" ? "video/mp4" : "application/octet-stream";
 
       res.setHeader("Content-Type", contentType);
       res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(downloadName)}"`);
-      
+
       const stream = fs.createReadStream(filePath);
       stream.pipe(res);
     } catch (error: any) {
@@ -615,16 +616,16 @@ export async function registerRoutes(
       }
 
       const filePath = getDownloadPath(job.outputPath);
-      
+
       if (!fs.existsSync(filePath)) {
         return res.status(404).json({ message: "File not found" });
       }
 
       const stat = fs.statSync(filePath);
       const ext = path.extname(job.outputPath);
-      const contentType = ext === ".mp3" ? "audio/mpeg" : 
-                          ext === ".m4a" ? "audio/mp4" :
-                          ext === ".mp4" ? "video/mp4" : "application/octet-stream";
+      const contentType = ext === ".mp3" ? "audio/mpeg" :
+        ext === ".m4a" ? "audio/mp4" :
+          ext === ".mp4" ? "video/mp4" : "application/octet-stream";
 
       const range = req.headers.range;
 
@@ -679,7 +680,7 @@ export async function registerRoutes(
   app.delete("/api/social/jobs/:id", async (req, res) => {
     try {
       const job = downloadJobs.get(req.params.id);
-      
+
       if (job?.outputPath) {
         cleanupDownload(job.outputPath);
       }
@@ -699,7 +700,7 @@ export async function registerRoutes(
 
   const IMAGE_UPLOAD_DIR = path.join(process.cwd(), "uploads", "images");
   const PDF_UPLOAD_DIR = path.join(process.cwd(), "uploads", "pdfs");
-  
+
   if (!fs.existsSync(IMAGE_UPLOAD_DIR)) {
     fs.mkdirSync(IMAGE_UPLOAD_DIR, { recursive: true });
   }
@@ -755,9 +756,9 @@ export async function registerRoutes(
 
       const { jobId } = req.body;
       const filePath = req.file.path;
-      
+
       const metadata = await imageProcessor.getImageMetadata(filePath);
-      
+
       const job: ImageJob = {
         id: jobId,
         fileName: req.file.filename,
@@ -772,10 +773,10 @@ export async function registerRoutes(
         settings: {},
         createdAt: Date.now(),
       };
-      
+
       imageJobs.set(jobId, job);
-      
-      res.json({ 
+
+      res.json({
         job,
         metadata,
         previewUrl: `/api/image/preview/${jobId}`,
@@ -792,10 +793,10 @@ export async function registerRoutes(
       if (!job) {
         return res.status(404).json({ message: "Job not found" });
       }
-      
+
       const filePath = path.join(IMAGE_UPLOAD_DIR, job.fileName);
       const preview = await imageProcessor.createPreview(filePath, 600, 70);
-      
+
       res.set("Content-Type", "image/jpeg");
       res.send(preview);
     } catch (error: any) {
@@ -806,17 +807,17 @@ export async function registerRoutes(
   app.post("/api/image/process", async (req, res) => {
     try {
       const { jobId, operation, settings } = req.body;
-      
+
       const job = imageJobs.get(jobId);
       if (!job) {
         return res.status(404).json({ message: "Job not found" });
       }
-      
+
       job.status = "processing";
       job.operation = operation;
       job.settings = settings;
       imageJobs.set(jobId, job);
-      
+
       const inputPath = path.join(IMAGE_UPLOAD_DIR, job.fileName);
       // Determine output format based on operation
       let outputFormat: string;
@@ -828,7 +829,7 @@ export async function registerRoutes(
         outputFormat = settings.outputFormat || "jpg";
       }
       const outputPath = imageProcessor.getOutputPath(jobId, outputFormat);
-      
+
       const result = await imageProcessor.processImage(
         inputPath,
         outputPath,
@@ -840,14 +841,14 @@ export async function registerRoutes(
           broadcastImageProgress(jobId, progress);
         }
       );
-      
+
       job.status = "completed";
       job.progress = 100;
       job.outputPath = result.outputPath;
       job.outputSize = result.outputSize;
       job.completedAt = Date.now();
       imageJobs.set(jobId, job);
-      
+
       res.json({ job });
     } catch (error: any) {
       const job = imageJobs.get(req.body.jobId);
@@ -866,10 +867,10 @@ export async function registerRoutes(
       if (!job || !job.outputPath) {
         return res.status(404).json({ message: "File not found" });
       }
-      
+
       const ext = path.extname(job.outputPath);
       const filename = `${job.originalName.replace(/\.[^.]+$/, "")}${ext}`;
-      
+
       res.download(job.outputPath, filename);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -879,15 +880,15 @@ export async function registerRoutes(
   app.post("/api/image/estimate", async (req, res) => {
     try {
       const { jobId, settings } = req.body;
-      
+
       const job = imageJobs.get(jobId);
       if (!job) {
         return res.status(404).json({ message: "Job not found" });
       }
-      
+
       const inputPath = path.join(IMAGE_UPLOAD_DIR, job.fileName);
       const estimatedSize = await imageProcessor.estimateOutputSize(inputPath, settings);
-      
+
       res.json({ estimatedSize });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -923,14 +924,14 @@ export async function registerRoutes(
 
       const { jobId } = req.body;
       const filePath = req.file.path;
-      
+
       const metadata = await pdfProcessor.getPdfMetadata(filePath);
-      
+
       if (metadata.isEncrypted) {
         fs.unlinkSync(filePath);
         return res.status(400).json({ message: "Password-protected PDFs are not supported" });
       }
-      
+
       const job: PdfJob = {
         id: jobId,
         fileName: req.file.filename,
@@ -943,9 +944,9 @@ export async function registerRoutes(
         settings: {},
         createdAt: Date.now(),
       };
-      
+
       pdfJobs.set(jobId, job);
-      
+
       res.json({ job, metadata });
     } catch (error: any) {
       console.error("PDF upload error:", error);
@@ -959,10 +960,10 @@ export async function registerRoutes(
       if (!job) {
         return res.status(404).json({ message: "Job not found" });
       }
-      
+
       const filePath = path.join(PDF_UPLOAD_DIR, job.fileName);
       const pages = await pdfProcessor.getPageThumbnails(filePath);
-      
+
       res.json({ pages });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -974,21 +975,21 @@ export async function registerRoutes(
       const { jobIds } = req.body;
       // Generate outputJobId if not provided
       const outputJobId = req.body.outputJobId || `pdf_merge_${Date.now()}`;
-      
+
       const inputPaths = jobIds.map((id: string) => {
         const job = pdfJobs.get(id);
         if (!job) throw new Error(`Job ${id} not found`);
         return path.join(PDF_UPLOAD_DIR, job.fileName);
       });
-      
+
       const outputPath = pdfProcessor.getOutputPath(outputJobId);
-      
+
       const result = await pdfProcessor.mergePdfs(
         inputPaths,
         outputPath,
         (progress) => broadcastPdfProgress(outputJobId, progress)
       );
-      
+
       const outputJob: PdfJob = {
         id: outputJobId,
         fileName: `${outputJobId}.pdf`,
@@ -1004,9 +1005,9 @@ export async function registerRoutes(
         createdAt: Date.now(),
         completedAt: Date.now(),
       };
-      
+
       pdfJobs.set(outputJobId, outputJob);
-      
+
       res.json({ job: outputJob });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -1017,19 +1018,19 @@ export async function registerRoutes(
     try {
       const { jobId, ranges } = req.body;
       const outputJobId = req.body.outputJobId || `pdf_split_${Date.now()}`;
-      
+
       const job = pdfJobs.get(jobId);
       if (!job) {
         return res.status(404).json({ message: "Job not found" });
       }
-      
+
       const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
       const outputDir = path.join(process.cwd(), "output", "pdfs", outputJobId);
-      
+
       if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
       }
-      
+
       // Parse page ranges - convert to arrays of page numbers for pdfProcessor
       let pageRanges: number[][];
       if (ranges === "all") {
@@ -1053,14 +1054,14 @@ export async function registerRoutes(
         // Default: all pages as one range
         pageRanges = [Array.from({ length: job.pageCount }, (_, i) => i + 1)];
       }
-      
+
       const result = await pdfProcessor.splitPdf(
         inputPath,
         outputDir,
         pageRanges,
         (progress) => broadcastPdfProgress(outputJobId, progress)
       );
-      
+
       // Create job for the first output (for download)
       const outputJob: PdfJob = {
         id: outputJobId,
@@ -1077,9 +1078,9 @@ export async function registerRoutes(
         createdAt: Date.now(),
         completedAt: Date.now(),
       };
-      
+
       pdfJobs.set(outputJobId, outputJob);
-      
+
       res.json({ job: outputJob, outputs: result.outputs });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -1090,17 +1091,17 @@ export async function registerRoutes(
     try {
       const { jobId, pages, degrees } = req.body;
       const outputJobId = req.body.outputJobId || `pdf_rotate_${Date.now()}`;
-      
+
       const job = pdfJobs.get(jobId);
       if (!job) {
         return res.status(404).json({ message: "Job not found" });
       }
-      
+
       const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
       const outputPath = pdfProcessor.getOutputPath(outputJobId);
-      
+
       // Convert simplified params to pageRotations format
-      let pageRotations: Array<{page: number; degrees: number}>;
+      let pageRotations: Array<{ page: number; degrees: number }>;
       if (pages === "all") {
         pageRotations = Array.from({ length: job.pageCount }, (_, i) => ({
           page: i + 1,
@@ -1111,14 +1112,14 @@ export async function registerRoutes(
       } else {
         pageRotations = req.body.pageRotations || [{ page: 1, degrees: 90 }];
       }
-      
+
       const result = await pdfProcessor.rotatePdfPages(
         inputPath,
         outputPath,
         pageRotations,
         (progress) => broadcastPdfProgress(outputJobId, progress)
       );
-      
+
       const outputJob: PdfJob = {
         id: outputJobId,
         fileName: `${outputJobId}.pdf`,
@@ -1134,9 +1135,9 @@ export async function registerRoutes(
         createdAt: Date.now(),
         completedAt: Date.now(),
       };
-      
+
       pdfJobs.set(outputJobId, outputJob);
-      
+
       res.json({ job: outputJob });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -1147,25 +1148,25 @@ export async function registerRoutes(
     try {
       const { jobId, pages } = req.body;
       const outputJobId = req.body.outputJobId || `pdf_delete_${Date.now()}`;
-      
+
       const job = pdfJobs.get(jobId);
       if (!job) {
         return res.status(404).json({ message: "Job not found" });
       }
-      
+
       const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
       const outputPath = pdfProcessor.getOutputPath(outputJobId);
-      
+
       // Ensure pages is an array
       const pagesToDelete = Array.isArray(pages) ? pages : [pages];
-      
+
       const result = await pdfProcessor.deletePdfPages(
         inputPath,
         outputPath,
         pagesToDelete,
         (progress) => broadcastPdfProgress(outputJobId, progress)
       );
-      
+
       const outputJob: PdfJob = {
         id: outputJobId,
         fileName: `${outputJobId}.pdf`,
@@ -1181,9 +1182,9 @@ export async function registerRoutes(
         createdAt: Date.now(),
         completedAt: Date.now(),
       };
-      
+
       pdfJobs.set(outputJobId, outputJob);
-      
+
       res.json({ job: outputJob });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -1194,25 +1195,25 @@ export async function registerRoutes(
     try {
       const { jobId, newOrder } = req.body;
       const outputJobId = req.body.outputJobId || `pdf_reorder_${Date.now()}`;
-      
+
       const job = pdfJobs.get(jobId);
       if (!job) {
         return res.status(404).json({ message: "Job not found" });
       }
-      
+
       const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
       const outputPath = pdfProcessor.getOutputPath(outputJobId);
-      
+
       // If no order provided, just return the same order
       const order = newOrder || Array.from({ length: job.pageCount }, (_, i) => i + 1);
-      
+
       const result = await pdfProcessor.reorderPdfPages(
         inputPath,
         outputPath,
         order,
         (progress) => broadcastPdfProgress(outputJobId, progress)
       );
-      
+
       const outputJob: PdfJob = {
         id: outputJobId,
         fileName: `${outputJobId}.pdf`,
@@ -1228,29 +1229,29 @@ export async function registerRoutes(
         createdAt: Date.now(),
         completedAt: Date.now(),
       };
-      
+
       pdfJobs.set(outputJobId, outputJob);
-      
+
       res.json({ job: outputJob });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
   });
-  
+
   // PDF Compress
   app.post("/api/pdf/compress", async (req, res) => {
     try {
       const { jobId, level } = req.body;
       const outputJobId = req.body.outputJobId || `pdf_compress_${Date.now()}`;
-      
+
       const job = pdfJobs.get(jobId);
       if (!job) {
         return res.status(404).json({ message: "Job not found" });
       }
-      
+
       const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
       const outputPath = pdfProcessor.getOutputPath(outputJobId);
-      
+
       // For now, just copy the file (pdf-lib doesn't have built-in compression)
       // Real compression would need Ghostscript or similar
       const result = await pdfProcessor.compressPdf(
@@ -1259,7 +1260,7 @@ export async function registerRoutes(
         level || "medium",
         (progress) => broadcastPdfProgress(outputJobId, progress)
       );
-      
+
       const outputJob: PdfJob = {
         id: outputJobId,
         fileName: `${outputJobId}.pdf`,
@@ -1275,33 +1276,33 @@ export async function registerRoutes(
         createdAt: Date.now(),
         completedAt: Date.now(),
       };
-      
+
       pdfJobs.set(outputJobId, outputJob);
-      
+
       res.json({ job: outputJob });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
   });
-  
+
   // PDF to Images
   app.post("/api/pdf/to-images", async (req, res) => {
     try {
       const { jobId, format } = req.body;
       const outputJobId = req.body.outputJobId || `pdf_images_${Date.now()}`;
-      
+
       const job = pdfJobs.get(jobId);
       if (!job) {
         return res.status(404).json({ message: "Job not found" });
       }
-      
+
       const inputPath = path.join(PDF_UPLOAD_DIR, job.fileName);
       const outputDir = path.join(process.cwd(), "output", "pdfs", outputJobId);
-      
+
       if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
       }
-      
+
       const result = await pdfProcessor.pdfToImages(
         inputPath,
         outputDir,
@@ -1309,7 +1310,7 @@ export async function registerRoutes(
         85, // quality
         (progress) => broadcastPdfProgress(outputJobId, progress)
       );
-      
+
       const outputJob: PdfJob = {
         id: outputJobId,
         fileName: result.outputs[0]?.fileName || `${outputJobId}.${format || 'png'}`,
@@ -1325,9 +1326,9 @@ export async function registerRoutes(
         createdAt: Date.now(),
         completedAt: Date.now(),
       };
-      
+
       pdfJobs.set(outputJobId, outputJob);
-      
+
       res.json({ job: outputJob, outputs: result.outputs });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -1340,16 +1341,16 @@ export async function registerRoutes(
       if (!job || !job.outputPath) {
         return res.status(404).json({ message: "File not found" });
       }
-      
+
       const filename = job.originalName || "document.pdf";
-      
+
       // Check if outputPath is a directory (for split/to-images operations)
       const stats = fs.statSync(job.outputPath);
-      
+
       if (stats.isDirectory()) {
         // Check how many files are in the directory
         const files = fs.readdirSync(job.outputPath);
-        
+
         if (files.length === 1) {
           // Single file - download directly without zipping
           const singleFilePath = path.join(job.outputPath, files[0]);
@@ -1359,10 +1360,10 @@ export async function registerRoutes(
           // Multiple files - create a zip
           const archiver = await import('archiver');
           const archive = archiver.default('zip', { zlib: { level: 9 } });
-          
+
           res.setHeader('Content-Type', 'application/zip');
           res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\.[^.]+$/, '.zip')}"`);
-          
+
           archive.pipe(res);
           archive.directory(job.outputPath, false);
           await archive.finalize();

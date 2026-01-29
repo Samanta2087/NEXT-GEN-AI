@@ -1,14 +1,14 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { 
-  Terminal, 
-  Link2, 
-  Loader2, 
-  Play, 
-  Music, 
-  Video, 
-  Download, 
-  Trash2, 
+import {
+  Terminal,
+  Link2,
+  Loader2,
+  Play,
+  Music,
+  Video,
+  Download,
+  Trash2,
   AlertCircle,
   CheckCircle,
   Clock,
@@ -24,7 +24,6 @@ import { SiYoutube, SiInstagram, SiFacebook } from "react-icons/si";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FloatingOrb } from "@/components/FloatingOrb";
-import { Header } from "@/components/Header";
 import type { MediaInfo, DownloadJob, SupportedPlatform, AudioFormat } from "@shared/schema";
 
 const AUDIO_BITRATES = [64, 128, 192, 320] as const;
@@ -105,26 +104,26 @@ export default function Downloader() {
   const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
   const [availableResolutions, setAvailableResolutions] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  
+
   const [mode, setMode] = useState<"video" | "audio">("video");
   const [selectedResolution, setSelectedResolution] = useState<string>("1080p");
   const [audioFormat, setAudioFormat] = useState<AudioFormat>("mp3");
   const [audioBitrate, setAudioBitrate] = useState<number>(192);
   const [useAutoQuality, setUseAutoQuality] = useState(true);
-  
+
   const [metadata, setMetadata] = useState<{ title: string; artist: string; album: string }>({ title: "", artist: "", album: "" });
   const [showMetadataEditor, setShowMetadataEditor] = useState(false);
-  
+
   const [pendingQueue, setPendingQueue] = useState<QueuedItem[]>([]);
   const [downloadQueue, setDownloadQueue] = useState<DownloadJob[]>([]);
   const [downloadHistory, setDownloadHistory] = useState<DownloadJob[]>([]);
-  
+
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-    
+
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -137,7 +136,7 @@ export default function Downloader() {
             }
             return prev;
           });
-          
+
           if (job.status === "completed" || job.status === "error") {
             setDownloadHistory(prev => [job, ...prev.filter(j => j.id !== job.id)]);
             setDownloadQueue(prev => prev.filter(j => j.id !== job.id));
@@ -147,13 +146,13 @@ export default function Downloader() {
         console.error("WebSocket parse error:", e);
       }
     };
-    
+
     ws.onclose = () => {
       wsRef.current = null;
     };
-    
+
     wsRef.current = ws;
-    
+
     return () => {
       ws.close();
     };
@@ -161,27 +160,27 @@ export default function Downloader() {
 
   const analyzeUrl = useCallback(async () => {
     if (!url.trim()) return;
-    
+
     setIsAnalyzing(true);
     setError(null);
     setMediaInfo(null);
-    
+
     try {
       const response = await fetch("/api/social/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: url.trim() }),
       });
-      
+
       if (!response.ok) {
         const data = await response.json();
         throw new Error(data.message || "Failed to analyze URL");
       }
-      
+
       const data = await response.json();
       setMediaInfo(data.mediaInfo);
       setAvailableResolutions(data.availableResolutions || []);
-      
+
       if (data.availableResolutions?.length > 0) {
         setSelectedResolution(data.availableResolutions[0]);
       }
@@ -194,9 +193,9 @@ export default function Downloader() {
 
   const startDownload = useCallback(async () => {
     if (!mediaInfo) return;
-    
+
     const jobId = generateId();
-    
+
     const newJob: DownloadJob = {
       id: jobId,
       url: mediaInfo.url,
@@ -212,9 +211,9 @@ export default function Downloader() {
       audioBitrate: mode === "audio" ? audioBitrate : undefined,
       createdAt: Date.now(),
     };
-    
+
     setDownloadQueue(prev => [...prev, newJob]);
-    
+
     try {
       await fetch("/api/social/download", {
         method: "POST",
@@ -233,7 +232,7 @@ export default function Downloader() {
         }),
       });
     } catch (err: any) {
-      setDownloadQueue(prev => prev.map(j => 
+      setDownloadQueue(prev => prev.map(j =>
         j.id === jobId ? { ...j, status: "error" as const, errorMessage: err.message } : j
       ));
     }
@@ -245,10 +244,10 @@ export default function Downloader() {
 
   const addToQueue = useCallback(() => {
     if (!mediaInfo) return;
-    
+
     const ext = mode === "audio" ? audioFormat : "mp4";
     const filenamePreview = getFilenamePreview(metadata.title || mediaInfo.title, ext);
-    
+
     const queueItem: QueuedItem = {
       id: generateId(),
       mediaInfo,
@@ -256,12 +255,12 @@ export default function Downloader() {
       resolution: mode === "video" ? (useAutoQuality ? undefined : selectedResolution) : undefined,
       audioFormat: mode === "audio" ? audioFormat : undefined,
       audioBitrate: mode === "audio" ? audioBitrate : undefined,
-      metadata: mode === "audio" && (metadata.title || metadata.artist || metadata.album) 
-        ? { ...metadata } 
+      metadata: mode === "audio" && (metadata.title || metadata.artist || metadata.album)
+        ? { ...metadata }
         : undefined,
       filenamePreview,
     };
-    
+
     setPendingQueue(prev => [...prev, queueItem]);
     setMediaInfo(null);
     setUrl("");
@@ -275,10 +274,10 @@ export default function Downloader() {
   const startBatchDownload = useCallback(async () => {
     const itemsToProcess = [...pendingQueue];
     const successfulItems: string[] = [];
-    
+
     for (const item of itemsToProcess) {
       const jobId = generateId();
-      
+
       const newJob: DownloadJob = {
         id: jobId,
         url: item.mediaInfo.url,
@@ -295,9 +294,9 @@ export default function Downloader() {
         metadata: item.metadata,
         createdAt: Date.now(),
       };
-      
+
       setDownloadQueue(prev => [...prev, newJob]);
-      
+
       try {
         const response = await fetch("/api/social/download", {
           method: "POST",
@@ -316,29 +315,29 @@ export default function Downloader() {
             metadata: item.metadata,
           }),
         });
-        
+
         if (response.ok) {
           successfulItems.push(item.id);
         } else {
           const errorData = await response.json().catch(() => ({ message: "Failed to start download" }));
-          setDownloadQueue(prev => prev.map(j => 
+          setDownloadQueue(prev => prev.map(j =>
             j.id === jobId ? { ...j, status: "error" as const, errorMessage: errorData.message } : j
           ));
         }
       } catch (err: any) {
-        setDownloadQueue(prev => prev.map(j => 
+        setDownloadQueue(prev => prev.map(j =>
           j.id === jobId ? { ...j, status: "error" as const, errorMessage: err.message } : j
         ));
       }
     }
-    
+
     setPendingQueue(prev => prev.filter(item => !successfulItems.includes(item.id)));
   }, [pendingQueue]);
 
   const clearHistory = useCallback(() => {
     downloadHistory.forEach(job => {
       if (job.outputPath) {
-        fetch(`/api/social/jobs/${job.id}`, { method: "DELETE" }).catch(() => {});
+        fetch(`/api/social/jobs/${job.id}`, { method: "DELETE" }).catch(() => { });
       }
     });
     setDownloadHistory([]);
@@ -352,12 +351,11 @@ export default function Downloader() {
         <FloatingOrb size="lg" color="lime" delay={4} position={{ top: "5%", right: "20%" }} />
         <FloatingOrb size="md" color="blue" delay={1} position={{ bottom: "20%", left: "15%" }} />
       </div>
-      
+
       <div className="absolute inset-0 gradient-mesh opacity-30" />
-      
+
       <div className="relative z-10">
-        <Header showBackToConverter />
-        
+
         <main className="container mx-auto px-4 py-8 max-w-7xl">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -373,7 +371,7 @@ export default function Downloader() {
                 <Sparkles className="w-5 h-5 text-primary" />
                 <span className="text-sm font-medium text-primary">Social Media Extraction Studio</span>
               </motion.div>
-              
+
               <h1 className="text-4xl md:text-5xl font-black bg-gradient-to-r from-primary via-accent to-magenta bg-clip-text text-transparent">
                 Media Downloader
               </h1>
@@ -388,9 +386,9 @@ export default function Downloader() {
               animate={{ opacity: 1, scale: 1 }}
             >
               <div className="noise" />
-              
+
               <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-accent/5" />
-              
+
               <div className="relative z-10 p-6 md:p-8">
                 <div className="flex items-center gap-3 mb-6">
                   <div className="w-10 h-10 rounded-xl gradient-primary flex items-center justify-center shadow-glow-cyan">
@@ -401,16 +399,16 @@ export default function Downloader() {
                     <p className="text-xs text-muted-foreground">Paste any supported URL to begin</p>
                   </div>
                 </div>
-                
+
                 <div className="relative">
                   <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-primary/20 via-accent/20 to-magenta/20 blur-xl" />
-                  
+
                   <div className="relative flex gap-3 p-4 rounded-2xl bg-white/80 border border-primary/20 backdrop-blur-sm">
                     <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-primary/10 border border-primary/20">
                       <span className="text-primary font-mono text-sm">URL</span>
                       <div className="w-px h-4 bg-primary/30" />
                     </div>
-                    
+
                     <Input
                       data-testid="input-social-url"
                       value={url}
@@ -419,7 +417,7 @@ export default function Downloader() {
                       placeholder="https://youtube.com/watch?v=... or instagram.com/reel/..."
                       className="flex-1 border-0 bg-transparent text-lg focus-visible:ring-0 placeholder:text-muted-foreground/50"
                     />
-                    
+
                     <Button
                       data-testid="button-analyze-url"
                       onClick={analyzeUrl}
@@ -437,16 +435,15 @@ export default function Downloader() {
                     </Button>
                   </div>
                 </div>
-                
+
                 <div className="flex items-center justify-center gap-6 mt-6">
                   {(["youtube", "instagram", "facebook"] as SupportedPlatform[]).map((platform) => (
                     <motion.div
                       key={platform}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-full glass border ${
-                        mediaInfo?.platform === platform 
-                          ? `border-2 ${getPlatformColor(platform)} bg-gradient-to-r ${getPlatformGradient(platform)}`
-                          : "border-white/20 opacity-50"
-                      }`}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-full glass border ${mediaInfo?.platform === platform
+                        ? `border-2 ${getPlatformColor(platform)} bg-gradient-to-r ${getPlatformGradient(platform)}`
+                        : "border-white/20 opacity-50"
+                        }`}
                       animate={mediaInfo?.platform === platform ? { scale: [1, 1.05, 1] } : {}}
                       transition={{ duration: 1.5, repeat: Infinity }}
                     >
@@ -483,11 +480,11 @@ export default function Downloader() {
                   <div className="lg:col-span-1">
                     <div className="rounded-3xl glass-strong border border-primary/20 overflow-hidden">
                       <div className="noise" />
-                      
+
                       <div className={`relative aspect-video bg-gradient-to-br ${getPlatformGradient(mediaInfo.platform)}`}>
                         {mediaInfo.thumbnail ? (
-                          <img 
-                            src={mediaInfo.thumbnail} 
+                          <img
+                            src={mediaInfo.thumbnail}
                             alt={mediaInfo.title}
                             className="w-full h-full object-cover"
                           />
@@ -496,8 +493,8 @@ export default function Downloader() {
                             <PlatformIcon platform={mediaInfo.platform} className={`w-16 h-16 ${getPlatformColor(mediaInfo.platform)}`} />
                           </div>
                         )}
-                        
-                        <motion.div 
+
+                        <motion.div
                           className="absolute top-3 left-3 px-3 py-1.5 rounded-full glass flex items-center gap-2"
                           animate={{ scale: [1, 1.05, 1] }}
                           transition={{ duration: 2, repeat: Infinity }}
@@ -505,21 +502,21 @@ export default function Downloader() {
                           <PlatformIcon platform={mediaInfo.platform} className={`w-4 h-4 ${getPlatformColor(mediaInfo.platform)}`} />
                           <span className="text-xs font-medium capitalize">{mediaInfo.platform}</span>
                         </motion.div>
-                        
+
                         {mediaInfo.duration && (
                           <div className="absolute bottom-3 right-3 px-2 py-1 rounded-lg bg-black/70 text-white text-xs font-mono">
                             {formatDuration(mediaInfo.duration)}
                           </div>
                         )}
                       </div>
-                      
+
                       <div className="p-4 space-y-3">
                         <h3 className="font-bold text-foreground line-clamp-2">{mediaInfo.title}</h3>
-                        
+
                         {mediaInfo.uploader && (
                           <p className="text-sm text-muted-foreground">{mediaInfo.uploader}</p>
                         )}
-                        
+
                         <div className="flex items-center gap-4 text-xs text-muted-foreground">
                           {mediaInfo.viewCount && (
                             <span>{mediaInfo.viewCount.toLocaleString()} views</span>
@@ -535,7 +532,7 @@ export default function Downloader() {
                   <div className="lg:col-span-2 space-y-6">
                     <div className="rounded-3xl glass-strong border border-primary/20 p-6">
                       <div className="noise" />
-                      
+
                       <div className="flex items-center gap-3 mb-6">
                         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-accent flex items-center justify-center">
                           <Layers className="w-5 h-5 text-white" />
@@ -545,43 +542,41 @@ export default function Downloader() {
                           <p className="text-xs text-muted-foreground">Choose your extraction type</p>
                         </div>
                       </div>
-                      
+
                       <div className="grid grid-cols-2 gap-4 mb-6">
                         <Button
                           data-testid="button-mode-video"
                           variant="outline"
                           onClick={() => setMode("video")}
-                          className={`relative flex-col items-start gap-2 rounded-2xl border-2 ${
-                            mode === "video" 
-                              ? "border-primary bg-primary/10" 
-                              : "border-white/20 bg-white/50"
-                          }`}
+                          className={`relative flex-col items-start gap-2 rounded-2xl border-2 ${mode === "video"
+                            ? "border-primary bg-primary/10"
+                            : "border-white/20 bg-white/50"
+                            }`}
                         >
                           <Video className={`w-8 h-8 ${mode === "video" ? "text-cyan-600" : "text-muted-foreground"}`} />
                           <h4 className="font-bold text-foreground">Video</h4>
                           <p className="text-xs text-muted-foreground">Full video with audio</p>
-                          
+
                           {mode === "video" && (
                             <div className="absolute top-3 right-3">
                               <CheckCircle className="w-5 h-5 text-cyan-600" />
                             </div>
                           )}
                         </Button>
-                        
+
                         <Button
                           data-testid="button-mode-audio"
                           variant="outline"
                           onClick={() => setMode("audio")}
-                          className={`relative flex-col items-start gap-2 rounded-2xl border-2 ${
-                            mode === "audio" 
-                              ? "border-accent bg-accent/10" 
-                              : "border-white/20 bg-white/50"
-                          }`}
+                          className={`relative flex-col items-start gap-2 rounded-2xl border-2 ${mode === "audio"
+                            ? "border-accent bg-accent/10"
+                            : "border-white/20 bg-white/50"
+                            }`}
                         >
                           <Music className={`w-8 h-8 ${mode === "audio" ? "text-accent" : "text-muted-foreground"}`} />
                           <h4 className="font-bold text-foreground">Audio Only</h4>
                           <p className="text-xs text-muted-foreground">Extract audio track</p>
-                          
+
                           {mode === "audio" && (
                             <div className="absolute top-3 right-3">
                               <CheckCircle className="w-5 h-5 text-accent" />
@@ -604,7 +599,7 @@ export default function Downloader() {
                                 <Settings2 className="w-4 h-4" />
                                 Quality Settings
                               </h4>
-                              
+
                               <Button
                                 data-testid="button-auto-quality"
                                 variant={useAutoQuality ? "default" : "outline"}
@@ -614,7 +609,7 @@ export default function Downloader() {
                                 {useAutoQuality ? "Auto (Best)" : "Manual"}
                               </Button>
                             </div>
-                            
+
                             {!useAutoQuality && (
                               <div className="grid grid-cols-4 gap-2">
                                 {availableResolutions.map((res) => (
@@ -632,7 +627,7 @@ export default function Downloader() {
                             )}
                           </motion.div>
                         )}
-                        
+
                         {mode === "audio" && (
                           <motion.div
                             key="audio-options"
@@ -657,7 +652,7 @@ export default function Downloader() {
                                 ))}
                               </div>
                             </div>
-                            
+
                             <div>
                               <h4 className="font-medium text-foreground mb-3">Bitrate</h4>
                               <div className="grid grid-cols-4 gap-2">
@@ -703,7 +698,7 @@ export default function Downloader() {
                               <ChevronDown className="w-4 h-4" />
                             </motion.div>
                           </Button>
-                          
+
                           <AnimatePresence>
                             {showMetadataEditor && (
                               <motion.div
@@ -757,7 +752,7 @@ export default function Downloader() {
                           </span>
                         </div>
                       </div>
-                      
+
                       <div className="mt-6 flex gap-3">
                         <Button
                           data-testid="button-add-to-queue"
@@ -768,7 +763,7 @@ export default function Downloader() {
                           <Plus className="w-5 h-5 mr-2" />
                           Add to Queue
                         </Button>
-                        
+
                         <Button
                           data-testid="button-start-download"
                           onClick={startDownload}
@@ -791,7 +786,7 @@ export default function Downloader() {
                 className="rounded-3xl glass-strong border border-accent/20 p-6"
               >
                 <div className="noise" />
-                
+
                 <div className="flex items-center justify-between mb-6">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-lime-500 flex items-center justify-center">
@@ -802,7 +797,7 @@ export default function Downloader() {
                       <p className="text-xs text-muted-foreground">{pendingQueue.length} items ready</p>
                     </div>
                   </div>
-                  
+
                   <motion.button
                     data-testid="button-start-batch"
                     onClick={startBatchDownload}
@@ -814,7 +809,7 @@ export default function Downloader() {
                     Start All Downloads
                   </motion.button>
                 </div>
-                
+
                 <div className="space-y-3">
                   {pendingQueue.map((item) => (
                     <motion.div
@@ -834,7 +829,7 @@ export default function Downloader() {
                             </div>
                           )}
                         </div>
-                        
+
                         <div className="flex-1 min-w-0">
                           <h4 className="font-medium text-foreground truncate">{item.metadata?.title || item.mediaInfo.title}</h4>
                           <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
@@ -849,7 +844,7 @@ export default function Downloader() {
                             {item.filenamePreview}
                           </div>
                         </div>
-                        
+
                         <Button
                           data-testid={`button-remove-queue-${item.id}`}
                           variant="ghost"
@@ -873,7 +868,7 @@ export default function Downloader() {
                 className="rounded-3xl glass-strong border border-primary/20 p-6"
               >
                 <div className="noise" />
-                
+
                 <div className="flex items-center gap-3 mb-6">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-blue-600 flex items-center justify-center">
                     <Clock className="w-5 h-5 text-white" />
@@ -883,7 +878,7 @@ export default function Downloader() {
                     <p className="text-xs text-muted-foreground">{downloadQueue.length} in progress</p>
                   </div>
                 </div>
-                
+
                 <div className="space-y-4">
                   {downloadQueue.map((job) => (
                     <motion.div
@@ -901,7 +896,7 @@ export default function Downloader() {
                             </div>
                           )}
                         </div>
-                        
+
                         <div className="flex-1 min-w-0">
                           <h4 className="font-medium text-foreground truncate">{job.title}</h4>
                           <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
@@ -909,7 +904,7 @@ export default function Downloader() {
                             <span>•</span>
                             <span className="capitalize">{job.status}</span>
                           </div>
-                          
+
                           <div className="mt-3">
                             <div className="relative h-2 rounded-full overflow-hidden bg-primary/10">
                               <motion.div
@@ -918,7 +913,7 @@ export default function Downloader() {
                                 animate={{ width: `${job.progress}%` }}
                                 transition={{ duration: 0.3 }}
                               />
-                              
+
                               {job.status === "converting" && (
                                 <motion.div
                                   className="absolute inset-y-0 left-0 bg-accent/50 rounded-full"
@@ -948,7 +943,7 @@ export default function Downloader() {
                 className="rounded-3xl glass-strong border border-primary/20 p-6"
               >
                 <div className="noise" />
-                
+
                 <div className="flex items-center justify-between mb-6">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-lime-500 flex items-center justify-center">
@@ -959,7 +954,7 @@ export default function Downloader() {
                       <p className="text-xs text-muted-foreground">{downloadHistory.length} completed</p>
                     </div>
                   </div>
-                  
+
                   <Button
                     variant="ghost"
                     size="sm"
@@ -970,16 +965,15 @@ export default function Downloader() {
                     Clear All
                   </Button>
                 </div>
-                
+
                 <div className="space-y-3">
                   {downloadHistory.map((job) => (
                     <motion.div
                       key={job.id}
-                      className={`p-4 rounded-2xl border ${
-                        job.status === "completed" 
-                          ? "bg-accent/5 border-accent/20" 
-                          : "bg-red-500/5 border-red-500/20"
-                      }`}
+                      className={`p-4 rounded-2xl border ${job.status === "completed"
+                        ? "bg-accent/5 border-accent/20"
+                        : "bg-red-500/5 border-red-500/20"
+                        }`}
                       layout
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
@@ -994,7 +988,7 @@ export default function Downloader() {
                             </div>
                           )}
                         </div>
-                        
+
                         <div className="flex-1 min-w-0">
                           <h4 className="font-medium text-foreground truncate">{job.title}</h4>
                           <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
@@ -1007,7 +1001,7 @@ export default function Downloader() {
                             )}
                           </div>
                         </div>
-                        
+
                         {job.status === "completed" ? (
                           <Button
                             data-testid={`link-download-${job.id}`}

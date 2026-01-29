@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { setupSecurity, securityLogger } from "./security";
 
 // Handle uncaught exceptions and rejections to prevent server crashes
 process.on('uncaughtException', (error) => {
@@ -14,6 +15,12 @@ process.on('unhandledRejection', (reason, promise) => {
 
 const app = express();
 const httpServer = createServer(app);
+
+// Setup security (CORS, Helmet, rate limiting)
+setupSecurity(app);
+
+// Security logging for suspicious requests
+app.use(securityLogger);
 
 declare module "http" {
   interface IncomingMessage {
