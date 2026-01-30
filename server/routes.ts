@@ -13,6 +13,7 @@ import type { DownloadJob, MediaInfo, ImageJob, PdfJob, ImageSettings, PdfSettin
 import * as imageProcessor from "./imageProcessor";
 import * as pdfProcessor from "./pdfProcessor";
 import { uploadLimiter, downloadLimiter, analyzeLimiter, conversionLimiter } from "./security";
+import { trackFile, markAsDownloaded, startCleanupScheduler } from "./fileCleanup";
 
 const UPLOAD_DIR = path.join(process.cwd(), "uploads");
 const OUTPUT_DIR = path.join(process.cwd(), "output");
@@ -180,6 +181,9 @@ export async function registerRoutes(
 ): Promise<Server> {
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 
+  // Start automatic file cleanup scheduler
+  startCleanupScheduler();
+
   wss.on("connection", (ws) => {
     const clientId = Math.random().toString(36).substring(7);
     clients.set(clientId, ws);
@@ -298,6 +302,9 @@ export async function registerRoutes(
           completedAt: Date.now(),
         });
 
+        // Track output file for automatic cleanup
+        trackFile(jobId, outputPath, true);
+
         broadcastCompleted(jobId, outputFileName, duration);
 
         try {
@@ -343,6 +350,9 @@ export async function registerRoutes(
 
       res.setHeader("Content-Type", "audio/mpeg");
       res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(downloadName)}"`);
+
+      // Mark file as downloaded - will be auto-deleted after 5 minutes
+      markAsDownloaded(jobId);
 
       const stream = fs.createReadStream(filePath);
       stream.pipe(res);

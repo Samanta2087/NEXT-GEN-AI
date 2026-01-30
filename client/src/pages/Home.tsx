@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Play, Settings2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Header } from "@/components/Header";
+import { Footer } from "@/components/Footer";
 import { BackgroundOrbs } from "@/components/FloatingOrb";
 import { UploadZone } from "@/components/UploadZone";
 import { ConversionQueue } from "@/components/ConversionQueue";
@@ -227,6 +228,8 @@ export default function Home() {
           />
         )}
       </AnimatePresence>
+
+      <Footer />
     </div>
   );
 }

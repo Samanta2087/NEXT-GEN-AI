@@ -10,6 +10,8 @@ import Home from "@/pages/Home";
 // Lazy load heavy pages for faster initial load
 const Downloader = lazy(() => import("@/pages/Downloader"));
 const Tools = lazy(() => import("@/pages/Tools"));
+const Privacy = lazy(() => import("@/pages/Privacy"));
+const Terms = lazy(() => import("@/pages/Terms"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
 // Lightweight loading fallback
@@ -31,6 +33,8 @@ function Router() {
         <Route path="/" component={Home} />
         <Route path="/downloader" component={Downloader} />
         <Route path="/tools" component={Tools} />
+        <Route path="/privacy" component={Privacy} />
+        <Route path="/terms" component={Terms} />
         <Route component={NotFound} />
       </Switch>
     </Suspense>
@@ -50,4 +54,3 @@ function App() {
 }
 
 export default App;
-

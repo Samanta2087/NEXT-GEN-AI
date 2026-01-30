@@ -1,0 +1,14 @@
+# Grabnex - Video to MP3 Converter
+# https://grabnex.com
+
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://grabnex.com/sitemap.xml
+
+# Crawl-delay
+Crawl-delay: 1
+
+# Disallow admin/api routes
+Disallow: /api/

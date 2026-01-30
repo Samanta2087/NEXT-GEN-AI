@@ -1,10 +1,9 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Terminal,
   Link2,
   Loader2,
-  Play,
   Music,
   Video,
   Download,
@@ -13,17 +12,14 @@ import {
   CheckCircle,
   Clock,
   Zap,
-  Layers,
   Settings2,
   Sparkles,
   ChevronDown,
-  FileText,
-  Plus
+  FileText
 } from "lucide-react";
 import { SiYoutube, SiInstagram, SiFacebook } from "react-icons/si";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { FloatingOrb } from "@/components/FloatingOrb";
 import type { MediaInfo, DownloadJob, SupportedPlatform, AudioFormat } from "@shared/schema";
 
 const AUDIO_BITRATES = [64, 128, 192, 320] as const;
@@ -48,7 +44,7 @@ function formatFileSize(bytes?: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-function PlatformIcon({ platform, className }: { platform: SupportedPlatform; className?: string }) {
+const PlatformIcon = memo(function PlatformIcon({ platform, className }: { platform: SupportedPlatform; className?: string }) {
   switch (platform) {
     case "youtube":
       return <SiYoutube className={className} />;
@@ -59,7 +55,7 @@ function PlatformIcon({ platform, className }: { platform: SupportedPlatform; cl
     default:
       return <Link2 className={className} />;
   }
-}
+});
 
 function getPlatformColor(platform: SupportedPlatform): string {
   switch (platform) {
@@ -87,17 +83,6 @@ function getPlatformGradient(platform: SupportedPlatform): string {
   }
 }
 
-interface QueuedItem {
-  id: string;
-  mediaInfo: MediaInfo;
-  mode: "video" | "audio";
-  resolution?: string;
-  audioFormat?: AudioFormat;
-  audioBitrate?: number;
-  metadata?: { title?: string; artist?: string; album?: string };
-  filenamePreview: string;
-}
-
 export default function Downloader() {
   const [url, setUrl] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -114,7 +99,6 @@ export default function Downloader() {
   const [metadata, setMetadata] = useState<{ title: string; artist: string; album: string }>({ title: "", artist: "", album: "" });
   const [showMetadataEditor, setShowMetadataEditor] = useState(false);
 
-  const [pendingQueue, setPendingQueue] = useState<QueuedItem[]>([]);
   const [downloadQueue, setDownloadQueue] = useState<DownloadJob[]>([]);
   const [downloadHistory, setDownloadHistory] = useState<DownloadJob[]>([]);
 
@@ -242,98 +226,6 @@ export default function Downloader() {
     return title.replace(/[<>:"/\\|?*]/g, "_").substring(0, 50) + "." + ext;
   }, []);
 
-  const addToQueue = useCallback(() => {
-    if (!mediaInfo) return;
-
-    const ext = mode === "audio" ? audioFormat : "mp4";
-    const filenamePreview = getFilenamePreview(metadata.title || mediaInfo.title, ext);
-
-    const queueItem: QueuedItem = {
-      id: generateId(),
-      mediaInfo,
-      mode,
-      resolution: mode === "video" ? (useAutoQuality ? undefined : selectedResolution) : undefined,
-      audioFormat: mode === "audio" ? audioFormat : undefined,
-      audioBitrate: mode === "audio" ? audioBitrate : undefined,
-      metadata: mode === "audio" && (metadata.title || metadata.artist || metadata.album)
-        ? { ...metadata }
-        : undefined,
-      filenamePreview,
-    };
-
-    setPendingQueue(prev => [...prev, queueItem]);
-    setMediaInfo(null);
-    setUrl("");
-    setMetadata({ title: "", artist: "", album: "" });
-  }, [mediaInfo, mode, selectedResolution, audioFormat, audioBitrate, metadata, useAutoQuality, getFilenamePreview]);
-
-  const removeFromQueue = useCallback((id: string) => {
-    setPendingQueue(prev => prev.filter(item => item.id !== id));
-  }, []);
-
-  const startBatchDownload = useCallback(async () => {
-    const itemsToProcess = [...pendingQueue];
-    const successfulItems: string[] = [];
-
-    for (const item of itemsToProcess) {
-      const jobId = generateId();
-
-      const newJob: DownloadJob = {
-        id: jobId,
-        url: item.mediaInfo.url,
-        platform: item.mediaInfo.platform,
-        title: item.metadata?.title || item.mediaInfo.title,
-        thumbnail: item.mediaInfo.thumbnail,
-        duration: item.mediaInfo.duration,
-        status: "pending",
-        progress: 0,
-        mode: item.mode,
-        selectedResolution: item.resolution,
-        audioFormat: item.audioFormat,
-        audioBitrate: item.audioBitrate,
-        metadata: item.metadata,
-        createdAt: Date.now(),
-      };
-
-      setDownloadQueue(prev => [...prev, newJob]);
-
-      try {
-        const response = await fetch("/api/social/download", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jobId,
-            url: item.mediaInfo.url,
-            platform: item.mediaInfo.platform,
-            title: item.metadata?.title || item.mediaInfo.title,
-            thumbnail: item.mediaInfo.thumbnail,
-            duration: item.mediaInfo.duration,
-            mode: item.mode,
-            resolution: item.resolution,
-            audioFormat: item.audioFormat,
-            audioBitrate: item.audioBitrate,
-            metadata: item.metadata,
-          }),
-        });
-
-        if (response.ok) {
-          successfulItems.push(item.id);
-        } else {
-          const errorData = await response.json().catch(() => ({ message: "Failed to start download" }));
-          setDownloadQueue(prev => prev.map(j =>
-            j.id === jobId ? { ...j, status: "error" as const, errorMessage: errorData.message } : j
-          ));
-        }
-      } catch (err: any) {
-        setDownloadQueue(prev => prev.map(j =>
-          j.id === jobId ? { ...j, status: "error" as const, errorMessage: err.message } : j
-        ));
-      }
-    }
-
-    setPendingQueue(prev => prev.filter(item => !successfulItems.includes(item.id)));
-  }, [pendingQueue]);
-
   const clearHistory = useCallback(() => {
     downloadHistory.forEach(job => {
       if (job.outputPath) {
@@ -344,33 +236,16 @@ export default function Downloader() {
   }, [downloadHistory]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-white via-cyan-50/30 to-blue-50/40 relative overflow-hidden">
-      <div className="fixed inset-0 pointer-events-none">
-        <FloatingOrb size="lg" color="cyan" delay={0} position={{ top: "10%", left: "5%" }} />
-        <FloatingOrb size="md" color="magenta" delay={2} position={{ top: "60%", right: "10%" }} />
-        <FloatingOrb size="lg" color="lime" delay={4} position={{ top: "5%", right: "20%" }} />
-        <FloatingOrb size="md" color="blue" delay={1} position={{ bottom: "20%", left: "15%" }} />
-      </div>
-
-      <div className="absolute inset-0 gradient-mesh opacity-30" />
-
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-cyan-50/20 to-blue-50/30">
       <div className="relative z-10">
 
         <main className="container mx-auto px-4 py-8 max-w-7xl">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="space-y-8"
-          >
+          <div className="space-y-8">
             <div className="text-center space-y-4">
-              <motion.div
-                className="inline-flex items-center gap-3 px-6 py-3 rounded-full glass-strong border border-primary/20"
-                animate={{ scale: [1, 1.02, 1] }}
-                transition={{ duration: 3, repeat: Infinity }}
-              >
+              <div className="inline-flex items-center gap-3 px-6 py-3 rounded-full bg-white/80 backdrop-blur-sm border border-primary/20 shadow-sm">
                 <Sparkles className="w-5 h-5 text-primary" />
                 <span className="text-sm font-medium text-primary">Social Media Extraction Studio</span>
-              </motion.div>
+              </div>
 
               <h1 className="text-4xl md:text-5xl font-black bg-gradient-to-r from-primary via-accent to-magenta bg-clip-text text-transparent">
                 Media Downloader
@@ -380,18 +255,12 @@ export default function Downloader() {
               </p>
             </div>
 
-            <motion.div
-              className="relative rounded-3xl glass-strong border-2 border-primary/30 shadow-glow-cyan overflow-hidden"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-            >
-              <div className="noise" />
-
+            <div className="relative rounded-3xl bg-white/90 backdrop-blur-sm border-2 border-primary/30 shadow-xl overflow-hidden">
               <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-accent/5" />
 
               <div className="relative z-10 p-6 md:p-8">
                 <div className="flex items-center gap-3 mb-6">
-                  <div className="w-10 h-10 rounded-xl gradient-primary flex items-center justify-center shadow-glow-cyan">
+                  <div className="w-10 h-10 rounded-xl gradient-primary flex items-center justify-center shadow-lg">
                     <Terminal className="w-5 h-5 text-white" />
                   </div>
                   <div>
@@ -400,60 +269,54 @@ export default function Downloader() {
                   </div>
                 </div>
 
-                <div className="relative">
-                  <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-primary/20 via-accent/20 to-magenta/20 blur-xl" />
-
-                  <div className="relative flex gap-3 p-4 rounded-2xl bg-white/80 border border-primary/20 backdrop-blur-sm">
-                    <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-primary/10 border border-primary/20">
-                      <span className="text-primary font-mono text-sm">URL</span>
-                      <div className="w-px h-4 bg-primary/30" />
-                    </div>
-
-                    <Input
-                      data-testid="input-social-url"
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && analyzeUrl()}
-                      placeholder="https://youtube.com/watch?v=... or instagram.com/reel/..."
-                      className="flex-1 border-0 bg-transparent text-lg focus-visible:ring-0 placeholder:text-muted-foreground/50"
-                    />
-
-                    <Button
-                      data-testid="button-analyze-url"
-                      onClick={analyzeUrl}
-                      disabled={isAnalyzing || !url.trim()}
-                      className="px-6 rounded-xl gradient-primary text-white shadow-glow-cyan"
-                    >
-                      {isAnalyzing ? (
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                      ) : (
-                        <>
-                          <Zap className="w-5 h-5 mr-2" />
-                          Analyze
-                        </>
-                      )}
-                    </Button>
+                <div className="flex gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-primary/10 border border-primary/20">
+                    <span className="text-primary font-mono text-sm">URL</span>
+                    <div className="w-px h-4 bg-primary/30" />
                   </div>
+
+                  <Input
+                    data-testid="input-social-url"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && analyzeUrl()}
+                    placeholder="https://youtube.com/watch?v=... or instagram.com/reel/..."
+                    className="flex-1 border-0 bg-transparent text-lg focus-visible:ring-0 placeholder:text-muted-foreground/50"
+                  />
+
+                  <Button
+                    data-testid="button-analyze-url"
+                    onClick={analyzeUrl}
+                    disabled={isAnalyzing || !url.trim()}
+                    className="px-6 rounded-xl gradient-primary text-white shadow-lg"
+                  >
+                    {isAnalyzing ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <>
+                        <Zap className="w-5 h-5 mr-2" />
+                        Analyze
+                      </>
+                    )}
+                  </Button>
                 </div>
 
                 <div className="flex items-center justify-center gap-6 mt-6">
                   {(["youtube", "instagram", "facebook"] as SupportedPlatform[]).map((platform) => (
-                    <motion.div
+                    <div
                       key={platform}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-full glass border ${mediaInfo?.platform === platform
+                      className={`flex items-center gap-2 px-4 py-2 rounded-full border ${mediaInfo?.platform === platform
                         ? `border-2 ${getPlatformColor(platform)} bg-gradient-to-r ${getPlatformGradient(platform)}`
-                        : "border-white/20 opacity-50"
+                        : "border-slate-200 bg-white/50 opacity-50"
                         }`}
-                      animate={mediaInfo?.platform === platform ? { scale: [1, 1.05, 1] } : {}}
-                      transition={{ duration: 1.5, repeat: Infinity }}
                     >
                       <PlatformIcon platform={platform} className={`w-5 h-5 ${getPlatformColor(platform)}`} />
                       <span className="text-sm font-medium capitalize">{platform}</span>
-                    </motion.div>
+                    </div>
                   ))}
                 </div>
               </div>
-            </motion.div>
+            </div>
 
             <AnimatePresence mode="wait">
               {error && (
@@ -478,15 +341,14 @@ export default function Downloader() {
                   className="grid grid-cols-1 lg:grid-cols-3 gap-6"
                 >
                   <div className="lg:col-span-1">
-                    <div className="rounded-3xl glass-strong border border-primary/20 overflow-hidden">
-                      <div className="noise" />
-
+                    <div className="rounded-3xl bg-white/90 backdrop-blur-sm border border-primary/20 overflow-hidden shadow-lg">
                       <div className={`relative aspect-video bg-gradient-to-br ${getPlatformGradient(mediaInfo.platform)}`}>
                         {mediaInfo.thumbnail ? (
                           <img
                             src={mediaInfo.thumbnail}
                             alt={mediaInfo.title}
                             className="w-full h-full object-cover"
+                            loading="eager"
                           />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center">
@@ -494,14 +356,10 @@ export default function Downloader() {
                           </div>
                         )}
 
-                        <motion.div
-                          className="absolute top-3 left-3 px-3 py-1.5 rounded-full glass flex items-center gap-2"
-                          animate={{ scale: [1, 1.05, 1] }}
-                          transition={{ duration: 2, repeat: Infinity }}
-                        >
+                        <div className="absolute top-3 left-3 px-3 py-1.5 rounded-full bg-white/90 backdrop-blur-sm flex items-center gap-2">
                           <PlatformIcon platform={mediaInfo.platform} className={`w-4 h-4 ${getPlatformColor(mediaInfo.platform)}`} />
                           <span className="text-xs font-medium capitalize">{mediaInfo.platform}</span>
-                        </motion.div>
+                        </div>
 
                         {mediaInfo.duration && (
                           <div className="absolute bottom-3 right-3 px-2 py-1 rounded-lg bg-black/70 text-white text-xs font-mono">
@@ -530,12 +388,11 @@ export default function Downloader() {
                   </div>
 
                   <div className="lg:col-span-2 space-y-6">
-                    <div className="rounded-3xl glass-strong border border-primary/20 p-6">
-                      <div className="noise" />
+                    <div className="rounded-3xl bg-white/90 backdrop-blur-sm border border-primary/20 p-6 shadow-lg">
 
                       <div className="flex items-center gap-3 mb-6">
                         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-accent flex items-center justify-center">
-                          <Layers className="w-5 h-5 text-white" />
+                          <Settings2 className="w-5 h-5 text-white" />
                         </div>
                         <div>
                           <h3 className="font-bold text-foreground">Download Mode</h3>
@@ -753,23 +610,13 @@ export default function Downloader() {
                         </div>
                       </div>
 
-                      <div className="mt-6 flex gap-3">
-                        <Button
-                          data-testid="button-add-to-queue"
-                          variant="outline"
-                          onClick={addToQueue}
-                          className="flex-1"
-                        >
-                          <Plus className="w-5 h-5 mr-2" />
-                          Add to Queue
-                        </Button>
-
+                      <div className="mt-6">
                         <Button
                           data-testid="button-start-download"
                           onClick={startDownload}
-                          className="flex-1 gradient-primary text-white border-0"
+                          className="w-full gradient-primary text-white border-0 py-6 text-lg font-bold"
                         >
-                          <Download className="w-5 h-5 mr-2" />
+                          <Download className="w-6 h-6 mr-2" />
                           Download Now
                         </Button>
                       </div>
@@ -778,88 +625,6 @@ export default function Downloader() {
                 </motion.div>
               )}
             </AnimatePresence>
-
-            {pendingQueue.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="rounded-3xl glass-strong border border-accent/20 p-6"
-              >
-                <div className="noise" />
-
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-lime-500 flex items-center justify-center">
-                      <Layers className="w-5 h-5 text-white" />
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-foreground">Batch Queue</h3>
-                      <p className="text-xs text-muted-foreground">{pendingQueue.length} items ready</p>
-                    </div>
-                  </div>
-
-                  <motion.button
-                    data-testid="button-start-batch"
-                    onClick={startBatchDownload}
-                    className="px-6 py-3 rounded-xl font-bold gradient-primary text-white shadow-glow-cyan flex items-center gap-2"
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                  >
-                    <Zap className="w-5 h-5" />
-                    Start All Downloads
-                  </motion.button>
-                </div>
-
-                <div className="space-y-3">
-                  {pendingQueue.map((item) => (
-                    <motion.div
-                      key={item.id}
-                      className="p-4 rounded-2xl bg-white/50 border border-white/30"
-                      layout
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                    >
-                      <div className="flex items-center gap-4">
-                        <div className="w-16 h-16 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                          {item.mediaInfo.thumbnail ? (
-                            <img src={item.mediaInfo.thumbnail} alt={item.mediaInfo.title} className="w-full h-full object-cover" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center">
-                              <PlatformIcon platform={item.mediaInfo.platform} className={`w-8 h-8 ${getPlatformColor(item.mediaInfo.platform)}`} />
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="flex-1 min-w-0">
-                          <h4 className="font-medium text-foreground truncate">{item.metadata?.title || item.mediaInfo.title}</h4>
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
-                            <span className={`px-2 py-0.5 rounded-full ${item.mode === "video" ? "bg-primary/10 text-primary" : "bg-accent/10 text-accent"}`}>
-                              {item.mode === "video" ? "Video" : "Audio"}
-                            </span>
-                            {item.resolution && <span>{item.resolution}</span>}
-                            {item.audioFormat && <span className="uppercase">{item.audioFormat}</span>}
-                            {item.audioBitrate && <span>{item.audioBitrate}kbps</span>}
-                          </div>
-                          <div className="text-xs text-muted-foreground mt-1 font-mono truncate">
-                            {item.filenamePreview}
-                          </div>
-                        </div>
-
-                        <Button
-                          data-testid={`button-remove-queue-${item.id}`}
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => removeFromQueue(item.id)}
-                          className="text-muted-foreground flex-shrink-0"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </motion.div>
-                  ))}
-                </div>
-              </motion.div>
-            )}
 
             {downloadQueue.length > 0 && (
               <motion.div
@@ -1024,7 +789,7 @@ export default function Downloader() {
                 </div>
               </motion.div>
             )}
-          </motion.div>
+          </div>
         </main>
       </div>
     </div>
