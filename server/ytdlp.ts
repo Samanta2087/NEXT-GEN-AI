@@ -60,9 +60,9 @@ export async function analyzeUrl(url: string): Promise<MediaInfo> {
       "--no-warnings",
       "--flat-playlist",
       "--no-playlist",
-      // Speed optimizations
-      "--socket-timeout", "10",
-      "--extractor-args", "youtube:player_client=ios,web",
+      // Stealth and IP fixes
+      "--force-ipv4",
+      "--extractor-args", "youtube:player_client=android,web;player_skip=configs",
       "--skip-download",
       "--no-check-certificates",
       url,
@@ -187,10 +187,9 @@ export async function downloadMedia(options: DownloadOptions): Promise<{ outputP
     "--no-warnings",
     "--newline",
     "--progress",
-    // Avoid 403 errors - use a browser-like user agent
-    "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    // Use multiple clients for maximum reliability and to bypass bot detection
-    "--extractor-args", "youtube:player_client=ios,android,web",
+    // Avoid 403 errors and bot detection
+    "--force-ipv4",
+    "--extractor-args", "youtube:player_client=android,web;player_skip=configs",
     // Faster download settings
     "--concurrent-fragments", "4", // Download 4 fragments at once for HLS
     "--no-playlist", // Don't download entire playlist
