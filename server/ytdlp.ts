@@ -153,7 +153,7 @@ function parseErrorMessage(stderr: string): string {
   if (stderr.includes("Sign in to confirm you're not a bot") ||
     stderr.includes("Sign in to confirm your age") ||
     stderr.includes("This helps protect our community")) {
-    return "YouTube requires sign-in verification. Please update your cookies.txt file with fresh cookies from a logged-in YouTube session.";
+    return "YouTube has detected automated access and blocked this request. This is a platform limitation that affects all server-based download tools. Try using other platforms like Instagram, Facebook, or TikTok, which work without restrictions.";
   }
   if (stderr.includes("age-restricted") || stderr.includes("age restricted")) {
     return "This content is age-restricted and requires login. Please provide valid cookies.txt with an authenticated YouTube account.";
