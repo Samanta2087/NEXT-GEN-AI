@@ -164,6 +164,7 @@ export function setupSecurity(app: Express) {
           frameSrc: ["'none'"],
           baseUri: ["'self'"],
           formAction: ["'self'"],
+          upgradeInsecureRequests: null,
         },
       },
       crossOriginEmbedderPolicy: false, // Required for loading external images
