@@ -146,19 +146,25 @@ function parseFormat(format: any): MediaFormat {
  * Parse and clean error messages for better user feedback
  */
 function parseErrorMessage(stderr: string): string {
-  if (stderr.includes("Sign in to confirm") || stderr.includes("bot")) {
+  // Log stderr for debugging
+  console.log("[yt-dlp] stderr output:", stderr.slice(-500));
+
+  // Be more specific with error detection to avoid false positives
+  if (stderr.includes("Sign in to confirm you're not a bot") ||
+    stderr.includes("Sign in to confirm your age") ||
+    stderr.includes("This helps protect our community")) {
     return "YouTube requires sign-in verification. Please update your cookies.txt file with fresh cookies from a logged-in YouTube session.";
   }
-  if (stderr.includes("age")) {
+  if (stderr.includes("age-restricted") || stderr.includes("age restricted")) {
     return "This content is age-restricted and requires login. Please provide valid cookies.txt with an authenticated YouTube account.";
   }
-  if (stderr.includes("Private video") || stderr.includes("private")) {
+  if (stderr.includes("Private video")) {
     return "This video is private and cannot be accessed.";
   }
-  if (stderr.includes("Video unavailable") || stderr.includes("unavailable")) {
+  if (stderr.includes("Video unavailable") || stderr.includes("video is unavailable")) {
     return "This video is unavailable or has been removed.";
   }
-  if (stderr.includes("HTTP Error 403")) {
+  if (stderr.includes("HTTP Error 403") || stderr.includes("403 Forbidden")) {
     return "Access forbidden. The video may be geo-restricted or require authentication.";
   }
   if (stderr.includes("HTTP Error 404")) {
@@ -167,8 +173,15 @@ function parseErrorMessage(stderr: string): string {
   if (stderr.includes("No video formats found") || stderr.includes("no video formats")) {
     return "No downloadable formats found for this video.";
   }
-  if (stderr.includes("ENOTFOUND") || stderr.includes("network")) {
+  if (stderr.includes("ENOTFOUND") || stderr.includes("getaddrinfo")) {
     return "Network error. Please check your internet connection.";
+  }
+  if (stderr.includes("ERROR:")) {
+    // Extract the actual error message after ERROR:
+    const errorMatch = stderr.match(/ERROR:\s*(.+?)(?:\n|$)/);
+    if (errorMatch) {
+      return errorMatch[1].trim();
+    }
   }
   // Return last 300 chars if no specific match
   return stderr.slice(-300).trim() || "Failed to process the request";
@@ -241,8 +254,16 @@ export async function analyzeUrl(url: string): Promise<MediaInfo> {
         return;
       }
 
+      // Log debug info
+      console.log(`[yt-dlp] Process exited with code: ${code}`);
+      if (stderr) {
+        console.log(`[yt-dlp] stderr length: ${stderr.length}`);
+      }
+
       if (code !== 0) {
-        const errorMsg = parseErrorMessage(stderr);
+        // Also check stdout for errors (sometimes yt-dlp puts errors there)
+        const allOutput = stderr + stdout;
+        const errorMsg = parseErrorMessage(allOutput);
         reject(new Error(errorMsg));
         return;
       }
