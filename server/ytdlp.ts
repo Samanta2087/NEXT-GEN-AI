@@ -34,12 +34,15 @@ function getExtendedPath(): string {
     }
   } else {
     // Linux VPS: Add common binary locations
-    const home = process.env.HOME || "";
+    const home = process.env.HOME || "/root";
     paths.push("/usr/local/bin");
     paths.push("/usr/bin");
     paths.push("/bin");
     paths.push("/snap/bin");
-    if (home) {
+    // Always add root Deno path for VPS
+    paths.push("/root/.deno/bin");
+    paths.push("/root/.local/bin");
+    if (home && home !== "/root") {
       paths.push(path.join(home, ".deno", "bin"));
       paths.push(path.join(home, ".local", "bin"));
       paths.push(path.join(home, "bin"));
@@ -188,15 +191,9 @@ export async function analyzeUrl(url: string): Promise<MediaInfo> {
       "--retries", "3",
     ];
 
-    // Add remote-components for YouTube JS challenges (only if deno is available)
-    try {
-      const denoCmd = isWindows ? "where deno" : "which deno";
-      execSync(denoCmd, { stdio: "ignore", env: { ...process.env, PATH: getExtendedPath() } });
-      args.push("--remote-components", "ejs:github");
-    } catch {
-      // Deno not available, skip remote-components
-      console.log("[yt-dlp] Deno not found, skipping remote-components");
-    }
+    // Always add remote-components for YouTube JS challenges
+    // This is required for modern YouTube - yt-dlp will handle if deno is not available
+    args.push("--remote-components", "ejs:github");
 
     // Use cookies if available
     const cookiesPath = getCookiesPath();
@@ -338,14 +335,8 @@ export async function downloadMedia(options: DownloadOptions): Promise<{ outputP
     "-o", outputTemplate,
   ];
 
-  // Add remote-components for YouTube JS challenges (only if deno is available)
-  try {
-    const denoCmd = isWindows ? "where deno" : "which deno";
-    execSync(denoCmd, { stdio: "ignore", env: { ...process.env, PATH: getExtendedPath() } });
-    args.push("--remote-components", "ejs:github");
-  } catch {
-    // Deno not available, skip remote-components
-  }
+  // Always add remote-components for YouTube JS challenges
+  args.push("--remote-components", "ejs:github");
 
   const cookiesPath = getCookiesPath();
   if (cookiesPath) {
