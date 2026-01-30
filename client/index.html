@@ -77,6 +77,17 @@
 <body>
   <div id="root"></div>
 
+  <!-- Debug Script -->
+  <script>
+    window.onerror = function (msg, url, line, col, error) {
+      document.body.innerHTML += '<div style="color:red; background:white; padding:20px; z-index:9999; position:absolute; top:0; left:0;">' +
+        '<h3>Error: ' + msg + '</h3>' +
+        '<p>File: ' + url + ':' + line + ':' + col + '</p>' +
+        '<pre>' + (error ? error.stack : 'no stack') + '</pre>' +
+        '</div>';
+    };
+  </script>
+
   <script type="module" src="/src/main.tsx"></script>
 
   <!-- Structured Data for SEO -->
