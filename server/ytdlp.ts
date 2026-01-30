@@ -60,13 +60,22 @@ export async function analyzeUrl(url: string): Promise<MediaInfo> {
       "--no-warnings",
       "--flat-playlist",
       "--no-playlist",
+    ];
+
+    // Use cookies if available
+    const cookiesPath = path.resolve(process.cwd(), "cookies.txt");
+    if (fs.existsSync(cookiesPath)) {
+      args.push("--cookies", cookiesPath);
+    }
+
+    args.push(
       // Stealth and IP fixes
       "--force-ipv4",
       "--extractor-args", "youtube:player_client=android,web;player_skip=configs",
       "--skip-download",
       "--no-check-certificates",
       url,
-    ];
+    );
 
     const ytdlpProcess = spawn("yt-dlp", args);
     let stdout = "";
@@ -187,19 +196,27 @@ export async function downloadMedia(options: DownloadOptions): Promise<{ outputP
     "--no-warnings",
     "--newline",
     "--progress",
+  ];
+
+  // Use cookies if available
+  const cookiesPath = path.resolve(process.cwd(), "cookies.txt");
+  if (fs.existsSync(cookiesPath)) {
+    args.push("--cookies", cookiesPath);
+  }
+
+  args.push(
     // Avoid 403 errors and bot detection
     "--force-ipv4",
     "--extractor-args", "youtube:player_client=android,web;player_skip=configs",
     // Faster download settings
-    "--concurrent-fragments", "4", // Download 4 fragments at once for HLS
-    "--no-playlist", // Don't download entire playlist
-    "--no-part", // Don't use .part files (faster)
+    "--concurrent-fragments", "4",
+    "--no-playlist",
+    "--no-part",
     "--retries", "3",
     "--fragment-retries", "3",
-    // Buffer settings for faster downloads
     "--buffer-size", "16K",
     "-o", outputTemplate,
-  ];
+  );
 
   if (mode === "audio") {
     // For audio: prefer progressive download formats over HLS
