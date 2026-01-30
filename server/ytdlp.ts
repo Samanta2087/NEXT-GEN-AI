@@ -71,7 +71,7 @@ export async function analyzeUrl(url: string): Promise<MediaInfo> {
     args.push(
       // Stealth and IP fixes
       "--force-ipv4",
-      "--extractor-args", "youtube:player_client=android,web;player_skip=configs",
+      "--extractor-args", "youtube:player_client=android,web",
       "--skip-download",
       "--no-check-certificates",
       url,
@@ -207,7 +207,7 @@ export async function downloadMedia(options: DownloadOptions): Promise<{ outputP
   args.push(
     // Avoid 403 errors and bot detection
     "--force-ipv4",
-    "--extractor-args", "youtube:player_client=android,web;player_skip=configs",
+    "--extractor-args", "youtube:player_client=android,web",
     // Faster download settings
     "--concurrent-fragments", "4",
     "--no-playlist",
