@@ -9,20 +9,8 @@ const corsOptions: cors.CorsOptions = {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
 
-    // In production, you would whitelist specific domains
-    // For now, allow localhost and common development origins
-    const allowedOrigins = [
-      'http://localhost:5000',
-      'http://localhost:3000',
-      'http://127.0.0.1:5000',
-      'http://127.0.0.1:3000',
-    ];
-
-    if (process.env.NODE_ENV !== 'production' || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
+    // For now, allow all origins to ensure deployment works
+    callback(null, true);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
