@@ -1,12 +1,97 @@
-import { spawn, ChildProcess } from "child_process";
+import { spawn, execSync } from "child_process";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import type { MediaInfo, MediaFormat, SupportedPlatform, DownloadJob, AudioFormat } from "@shared/schema";
 
 const DOWNLOAD_DIR = path.join(process.cwd(), "downloads");
 
+// Ensure download directory exists
 if (!fs.existsSync(DOWNLOAD_DIR)) {
   fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+}
+
+// Detect if running on Windows or Linux
+const isWindows = os.platform() === "win32";
+const isLinux = os.platform() === "linux";
+const pathSeparator = isWindows ? ";" : ":";
+
+/**
+ * Get extended PATH that includes common locations for yt-dlp dependencies
+ * Works on both Windows and Linux VPS
+ */
+function getExtendedPath(): string {
+  const paths: string[] = [process.env.PATH || ""];
+
+  if (isWindows) {
+    // Windows: Add common Deno locations
+    const userProfile = process.env.USERPROFILE || "";
+    if (userProfile) {
+      paths.push(path.join(userProfile, ".deno", "bin"));
+      paths.push(path.join(userProfile, "AppData", "Local", "Programs", "Python", "Python311"));
+      paths.push(path.join(userProfile, "AppData", "Local", "Programs", "Python", "Python312"));
+      paths.push(path.join(userProfile, "AppData", "Local", "Programs", "Python", "Python313"));
+    }
+  } else {
+    // Linux VPS: Add common binary locations
+    const home = process.env.HOME || "";
+    paths.push("/usr/local/bin");
+    paths.push("/usr/bin");
+    paths.push("/bin");
+    paths.push("/snap/bin");
+    if (home) {
+      paths.push(path.join(home, ".deno", "bin"));
+      paths.push(path.join(home, ".local", "bin"));
+      paths.push(path.join(home, "bin"));
+    }
+  }
+
+  return paths.filter(Boolean).join(pathSeparator);
+}
+
+/**
+ * Check if yt-dlp is installed and accessible
+ */
+function checkYtDlpInstalled(): boolean {
+  try {
+    const cmd = isWindows ? "where yt-dlp" : "which yt-dlp";
+    execSync(cmd, { stdio: "ignore", env: { ...process.env, PATH: getExtendedPath() } });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if ffmpeg is installed (required for audio extraction)
+ */
+function checkFfmpegInstalled(): boolean {
+  try {
+    const cmd = isWindows ? "where ffmpeg" : "which ffmpeg";
+    execSync(cmd, { stdio: "ignore", env: { ...process.env, PATH: getExtendedPath() } });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get cookies file path - checks multiple locations
+ */
+function getCookiesPath(): string | null {
+  const possiblePaths = [
+    path.resolve(process.cwd(), "cookies.txt"),
+    path.resolve(process.cwd(), "config", "cookies.txt"),
+    path.resolve("/etc/yt-dlp", "cookies.txt"),
+    path.resolve(os.homedir(), ".config", "yt-dlp", "cookies.txt"),
+  ];
+
+  for (const cookiePath of possiblePaths) {
+    if (fs.existsSync(cookiePath)) {
+      return cookiePath;
+    }
+  }
+  return null;
 }
 
 function detectPlatform(url: string): SupportedPlatform {
@@ -24,7 +109,7 @@ function detectPlatform(url: string): SupportedPlatform {
 }
 
 function parseFormat(format: any): MediaFormat {
-  const hasVideo = format.vcodec && format.vcodec !== "none";
+  const hasVideo = (format.vcodec && format.vcodec !== "none") || (format.format_note && format.format_note.toLowerCase().includes("p"));
   const hasAudio = format.acodec && format.acodec !== "none";
 
   let resolution: string | undefined;
@@ -32,6 +117,8 @@ function parseFormat(format: any): MediaFormat {
     resolution = `${format.height}p`;
   } else if (format.resolution && format.resolution !== "audio only") {
     resolution = format.resolution;
+  } else if (format.format_note && format.format_note.match(/^\d+p$/)) {
+    resolution = format.format_note;
   }
 
   return {
@@ -52,7 +139,44 @@ function parseFormat(format: any): MediaFormat {
   };
 }
 
+/**
+ * Parse and clean error messages for better user feedback
+ */
+function parseErrorMessage(stderr: string): string {
+  if (stderr.includes("Sign in to confirm") || stderr.includes("bot")) {
+    return "YouTube requires sign-in verification. Please update your cookies.txt file with fresh cookies from a logged-in YouTube session.";
+  }
+  if (stderr.includes("age")) {
+    return "This content is age-restricted and requires login. Please provide valid cookies.txt with an authenticated YouTube account.";
+  }
+  if (stderr.includes("Private video") || stderr.includes("private")) {
+    return "This video is private and cannot be accessed.";
+  }
+  if (stderr.includes("Video unavailable") || stderr.includes("unavailable")) {
+    return "This video is unavailable or has been removed.";
+  }
+  if (stderr.includes("HTTP Error 403")) {
+    return "Access forbidden. The video may be geo-restricted or require authentication.";
+  }
+  if (stderr.includes("HTTP Error 404")) {
+    return "Video not found. Please check the URL.";
+  }
+  if (stderr.includes("No video formats found") || stderr.includes("no video formats")) {
+    return "No downloadable formats found for this video.";
+  }
+  if (stderr.includes("ENOTFOUND") || stderr.includes("network")) {
+    return "Network error. Please check your internet connection.";
+  }
+  // Return last 300 chars if no specific match
+  return stderr.slice(-300).trim() || "Failed to process the request";
+}
+
 export async function analyzeUrl(url: string): Promise<MediaInfo> {
+  // Check dependencies first
+  if (!checkYtDlpInstalled()) {
+    throw new Error("yt-dlp is not installed. Please install it with: pip install yt-dlp (or apt install yt-dlp on Ubuntu)");
+  }
+
   return new Promise((resolve, reject) => {
     const args = [
       "--dump-json",
@@ -60,26 +184,49 @@ export async function analyzeUrl(url: string): Promise<MediaInfo> {
       "--no-warnings",
       "--flat-playlist",
       "--no-playlist",
+      "--socket-timeout", "30",
+      "--retries", "3",
     ];
 
+    // Add remote-components for YouTube JS challenges (only if deno is available)
+    try {
+      const denoCmd = isWindows ? "where deno" : "which deno";
+      execSync(denoCmd, { stdio: "ignore", env: { ...process.env, PATH: getExtendedPath() } });
+      args.push("--remote-components", "ejs:github");
+    } catch {
+      // Deno not available, skip remote-components
+      console.log("[yt-dlp] Deno not found, skipping remote-components");
+    }
+
     // Use cookies if available
-    const cookiesPath = path.resolve(process.cwd(), "cookies.txt");
-    if (fs.existsSync(cookiesPath)) {
+    const cookiesPath = getCookiesPath();
+    if (cookiesPath) {
       args.push("--cookies", cookiesPath);
+      console.log(`[yt-dlp] Using cookies from: ${cookiesPath}`);
     }
 
     args.push(
-      // Stealth and IP fixes
       "--force-ipv4",
-      "--extractor-args", "youtube:player_client=android,web",
-      "--skip-download",
       "--no-check-certificates",
       url,
     );
 
-    const ytdlpProcess = spawn("yt-dlp", args);
+    const extendedPath = getExtendedPath();
+
+    const ytdlpProcess = spawn("yt-dlp", args, {
+      env: { ...process.env, PATH: extendedPath },
+      timeout: 60000, // 60 second timeout
+    });
+
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+
+    // Set a timeout to kill the process if it hangs
+    const processTimeout = setTimeout(() => {
+      timedOut = true;
+      ytdlpProcess.kill("SIGTERM");
+    }, 60000);
 
     ytdlpProcess.stdout.on("data", (data) => {
       stdout += data.toString();
@@ -90,25 +237,26 @@ export async function analyzeUrl(url: string): Promise<MediaInfo> {
     });
 
     ytdlpProcess.on("close", (code) => {
+      clearTimeout(processTimeout);
+
+      if (timedOut) {
+        reject(new Error("Request timed out. The server took too long to respond."));
+        return;
+      }
+
       if (code !== 0) {
-        let errorMsg = stderr || "Failed to analyze URL";
-        if (errorMsg.includes("age")) {
-          errorMsg = "This content is age-restricted and requires login";
-        } else if (errorMsg.includes("geo") || errorMsg.includes("country")) {
-          errorMsg = "This content is not available in your region";
-        } else if (errorMsg.includes("private")) {
-          errorMsg = "This content is private";
-        } else if (errorMsg.includes("unavailable")) {
-          errorMsg = "This content is unavailable";
-        }
+        const errorMsg = parseErrorMessage(stderr);
         reject(new Error(errorMsg));
         return;
       }
 
       try {
         const lines = stdout.trim().split("\n");
-        const firstLine = lines[0];
-        const data = JSON.parse(firstLine);
+        if (!lines[0]) {
+          reject(new Error("No data received from yt-dlp"));
+          return;
+        }
+        const data = JSON.parse(lines[0]);
 
         const platform = detectPlatform(url);
         const isPlaylist = data._type === "playlist" || lines.length > 1;
@@ -118,15 +266,14 @@ export async function analyzeUrl(url: string): Promise<MediaInfo> {
         const videoFormats = formats.filter(f => f.hasVideo);
         const audioFormats = formats.filter(f => f.hasAudio && !f.hasVideo);
 
-        const bestVideo = videoFormats.sort((a, b) => {
-          const aHeight = parseInt(a.resolution?.replace("p", "") || "0");
-          const bHeight = parseInt(b.resolution?.replace("p", "") || "0");
+        const sortedVideo = videoFormats.sort((a, b) => {
+          const aHeight = parseInt(a.resolution?.replace("p", "").split("x").pop() || "0");
+          const bHeight = parseInt(b.resolution?.replace("p", "").split("x").pop() || "0");
           return bHeight - aHeight;
-        })[0];
+        });
 
-        const bestAudio = audioFormats.sort((a, b) => {
-          return (b.abr || 0) - (a.abr || 0);
-        })[0];
+        const bestVideo = sortedVideo[0];
+        const bestAudio = audioFormats.sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
 
         const info: MediaInfo = {
           id: data.id || Date.now().toString(),
@@ -148,199 +295,159 @@ export async function analyzeUrl(url: string): Promise<MediaInfo> {
 
         resolve(info);
       } catch (e) {
-        reject(new Error("Failed to parse media information"));
+        console.error("[yt-dlp] Parse error:", e);
+        reject(new Error("Failed to parse media information. The response format may have changed."));
       }
     });
 
     ytdlpProcess.on("error", (err) => {
-      reject(new Error(`yt-dlp not found: ${err.message}`));
+      clearTimeout(processTimeout);
+      if (err.message.includes("ENOENT")) {
+        reject(new Error("yt-dlp command not found. Please install yt-dlp."));
+      } else {
+        reject(new Error(`yt-dlp error: ${err.message}`));
+      }
     });
   });
-}
-
-interface DownloadOptions {
-  jobId: string;
-  url: string;
-  mode: "video" | "audio";
-  formatId?: string;
-  resolution?: string;
-  audioFormat?: AudioFormat;
-  audioBitrate?: number;
-  metadata?: {
-    title?: string;
-    artist?: string;
-    album?: string;
-  };
-  onProgress: (progress: number, stage: "downloading" | "converting") => void;
 }
 
 export async function downloadMedia(options: DownloadOptions): Promise<{ outputPath: string; fileSize: number }> {
   const { jobId, url, mode, formatId, resolution, audioFormat, audioBitrate, metadata, onProgress } = options;
 
-  console.log(`[yt-dlp] ============================================`);
-  console.log(`[yt-dlp] Download started`);
-  console.log(`[yt-dlp] jobId: ${jobId}`);
-  console.log(`[yt-dlp] url: ${url}`);
-  console.log(`[yt-dlp] mode: ${mode}`);
-  console.log(`[yt-dlp] resolution: ${resolution}`);
-  console.log(`[yt-dlp] formatId: ${formatId}`);
-  console.log(`[yt-dlp] audioFormat: ${audioFormat}`);
-  console.log(`[yt-dlp] audioBitrate: ${audioBitrate}`);
-  console.log(`[yt-dlp] ============================================`);
+  // Check dependencies
+  if (!checkYtDlpInstalled()) {
+    throw new Error("yt-dlp is not installed. Please install it with: pip install yt-dlp");
+  }
+
+  if (mode === "audio" && !checkFfmpegInstalled()) {
+    throw new Error("ffmpeg is not installed. It is required for audio extraction. Please install ffmpeg.");
+  }
 
   const ext = mode === "audio" ? (audioFormat || "mp3") : "mp4";
   const outputTemplate = path.join(DOWNLOAD_DIR, `${jobId}.%(ext)s`);
-  const finalPath = path.join(DOWNLOAD_DIR, `${jobId}.${ext}`);
 
   const args: string[] = [
     "--no-warnings",
     "--newline",
     "--progress",
+    "--force-ipv4",
+    "--no-check-certificates",
+    "--socket-timeout", "30",
+    "--retries", "5",
+    "--fragment-retries", "5",
+    "-o", outputTemplate,
   ];
 
-  // Use cookies if available
-  const cookiesPath = path.resolve(process.cwd(), "cookies.txt");
-  if (fs.existsSync(cookiesPath)) {
+  // Add remote-components for YouTube JS challenges (only if deno is available)
+  try {
+    const denoCmd = isWindows ? "where deno" : "which deno";
+    execSync(denoCmd, { stdio: "ignore", env: { ...process.env, PATH: getExtendedPath() } });
+    args.push("--remote-components", "ejs:github");
+  } catch {
+    // Deno not available, skip remote-components
+  }
+
+  const cookiesPath = getCookiesPath();
+  if (cookiesPath) {
     args.push("--cookies", cookiesPath);
   }
 
-  args.push(
-    // Avoid 403 errors and bot detection
-    "--force-ipv4",
-    "--extractor-args", "youtube:player_client=android,web",
-    // Faster download settings
-    "--concurrent-fragments", "4",
-    "--no-playlist",
-    "--no-part",
-    "--retries", "3",
-    "--fragment-retries", "3",
-    "--buffer-size", "16K",
-    "-o", outputTemplate,
-  );
-
   if (mode === "audio") {
-    // For audio: prefer progressive download formats over HLS
-    // Format 140 = m4a audio 128kbps
-    // Format 139 = m4a audio 48kbps
-    // Avoid audio-only streams that may be blocked
-    args.push("-f", "140/139/bestaudio[ext=m4a]/bestaudio/best");
-    args.push("-x");
-    args.push("--audio-format", audioFormat || "mp3");
-    if (audioBitrate) {
-      args.push("--audio-quality", `${audioBitrate}K`);
-    }
-
-    if (metadata) {
-      if (metadata.title) args.push("--parse-metadata", `title:${metadata.title}`);
-      if (metadata.artist) args.push("--parse-metadata", `artist:${metadata.artist}`);
-    }
+    args.push("-f", "bestaudio/best");
+    args.push("-x", "--audio-format", audioFormat || "mp3");
+    if (audioBitrate) args.push("--audio-quality", `${audioBitrate}K`);
   } else {
-    // For video: AVOID HLS live streams (91-96, 298-303) which cause 403 errors
-    // Use progressive download formats or regular adaptive streams
     if (formatId) {
-      // Check if user selected an HLS format and redirect to better option
-      const hlsFormats = ["91", "92", "93", "94", "95", "96", "298", "299", "300", "301", "302", "303"];
-      if (hlsFormats.includes(formatId)) {
-        // Redirect to equivalent progressive format
-        console.log(`[yt-dlp] HLS format ${formatId} detected, using alternative to avoid 403 errors`);
-        args.push("-f", "137+140/136+140/22/18/best[ext=mp4]/best");
-      } else {
-        args.push("-f", formatId);
-      }
+      args.push("-f", `${formatId}+bestaudio/best`);
     } else if (resolution) {
       const height = resolution.replace("p", "");
-      // Use progressive download formats ONLY - these don't get 403 errors
-      // Format 22 = 720p with audio
-      // Format 18 = 360p with audio
-      // Merge higher res video with audio format 140
-      if (height === "1080") {
-        args.push("-f", "137+140/22/best[height<=1080][ext=mp4]/best");
-      } else if (height === "720") {
-        args.push("-f", "22/136+140/best[height<=720][ext=mp4]/best");
-      } else if (height === "480") {
-        args.push("-f", "135+140/best[height<=480][ext=mp4]/18/best");
-      } else if (height === "360") {
-        args.push("-f", "18/134+140/best[height<=360][ext=mp4]/best");
-      } else {
-        args.push("-f", "18/best[height<=" + height + "][ext=mp4]/best");
-      }
+      args.push("-f", `bestvideo[height<=${height}]+bestaudio/best`);
     } else {
-      // Default: use format 22 (720p) or 18 (360p) - most reliable
-      args.push("-f", "22/18/136+140/135+140/best[ext=mp4]/best");
+      args.push("-f", "bestvideo+bestaudio/best");
     }
     args.push("--merge-output-format", "mp4");
   }
 
   args.push(url);
 
-  console.log(`[yt-dlp] Full command: yt-dlp ${args.join(" ")}`);
-
   return new Promise((resolve, reject) => {
-    const ytdlpProcess = spawn("yt-dlp", args);
+    const extendedPath = getExtendedPath();
+
+    const ytdlpProcess = spawn("yt-dlp", args, {
+      env: { ...process.env, PATH: extendedPath }
+    });
+
     let lastProgress = 0;
     let allOutput = "";
+    let timedOut = false;
 
-    console.log(`[yt-dlp] Process spawned with PID: ${ytdlpProcess.pid}`);
+    // Set a longer timeout for downloads (30 minutes)
+    const processTimeout = setTimeout(() => {
+      timedOut = true;
+      ytdlpProcess.kill("SIGTERM");
+    }, 30 * 60 * 1000);
 
     ytdlpProcess.stdout.on("data", (data) => {
       const output = data.toString();
       allOutput += output;
-      console.log(`[yt-dlp stdout] ${output.trim()}`);
       const lines = output.split("\n");
-
       for (const line of lines) {
-        const downloadMatch = line.match(/\[download\]\s+(\d+\.?\d*)%/);
-        if (downloadMatch) {
-          const progress = Math.min(parseFloat(downloadMatch[1]), 99);
+        const match = line.match(/\[download\]\s+(\d+\.?\d*)%/);
+        if (match) {
+          const progress = parseFloat(match[1]);
           if (progress > lastProgress) {
             lastProgress = progress;
             onProgress(progress, "downloading");
           }
         }
-
-        if (line.includes("[ExtractAudio]") || line.includes("[Merger]") || line.includes("[ffmpeg]")) {
+        if (line.includes("[ExtractAudio]") || line.includes("[Merger]")) {
           onProgress(95, "converting");
         }
       }
     });
 
     ytdlpProcess.stderr.on("data", (data) => {
-      const stderr = data.toString();
-      console.error(`[yt-dlp stderr] ${stderr.trim()}`);
-      allOutput += stderr;
+      allOutput += data.toString();
     });
 
     ytdlpProcess.on("close", (code) => {
-      console.log(`[yt-dlp] Process exited with code: ${code}`);
+      clearTimeout(processTimeout);
+
+      if (timedOut) {
+        reject(new Error("Download timed out. The file may be too large or the connection is slow."));
+        return;
+      }
 
       if (code !== 0) {
-        console.error(`[yt-dlp] Download failed. Full output:\n${allOutput}`);
-        reject(new Error(`Download failed with exit code ${code}`));
+        const errorMsg = parseErrorMessage(allOutput);
+        reject(new Error(`Download failed: ${errorMsg}`));
         return;
       }
 
-      const files = fs.readdirSync(DOWNLOAD_DIR);
-      const outputFile = files.find(f => f.startsWith(jobId) && !f.endsWith('.part') && !f.endsWith('.ytdl'));
+      try {
+        const files = fs.readdirSync(DOWNLOAD_DIR);
+        const outputFile = files.find(f => f.startsWith(jobId) && !f.endsWith('.part') && !f.endsWith('.ytdl') && !f.endsWith('.temp'));
 
-      console.log(`[yt-dlp] Looking for output file starting with: ${jobId}`);
-      console.log(`[yt-dlp] Files in directory: ${files.filter(f => f.startsWith(jobId)).join(', ')}`);
+        if (!outputFile) {
+          reject(new Error("Output file not found after download completed"));
+          return;
+        }
 
-      if (!outputFile) {
-        reject(new Error("Output file not found"));
-        return;
+        const stats = fs.statSync(path.join(DOWNLOAD_DIR, outputFile));
+        onProgress(100, "downloading");
+        resolve({ outputPath: outputFile, fileSize: stats.size });
+      } catch (err: any) {
+        reject(new Error(`Failed to process output file: ${err.message}`));
       }
-
-      const outputPath = path.join(DOWNLOAD_DIR, outputFile);
-      const stats = fs.statSync(outputPath);
-
-      console.log(`[yt-dlp] Download complete: ${outputFile} (${stats.size} bytes)`);
-      onProgress(100, "downloading");
-      resolve({ outputPath: outputFile, fileSize: stats.size });
     });
 
     ytdlpProcess.on("error", (err) => {
-      console.error(`[yt-dlp] Spawn error: ${err.message}`);
-      reject(new Error(`yt-dlp error: ${err.message}`));
+      clearTimeout(processTimeout);
+      if (err.message.includes("ENOENT")) {
+        reject(new Error("yt-dlp command not found. Please install yt-dlp."));
+      } else {
+        reject(new Error(`Download error: ${err.message}`));
+      }
     });
   });
 }
@@ -356,67 +463,63 @@ export function cleanupDownload(filename: string): boolean {
       fs.unlinkSync(filePath);
       return true;
     }
-    return false;
   } catch (e) {
-    return false;
+    console.error("[cleanup] Failed to delete file:", e);
   }
+  return false;
 }
 
 export function getAvailableResolutions(formats: MediaFormat[]): string[] {
   const resolutions = new Set<string>();
-
   for (const format of formats) {
-    if (format.hasVideo) {
-      // Try to get resolution from height directly first
-      // format.resolution is often string like "1920x1080" or just "1080p"
-      let heightVal: number | null = null;
-
-      if (format.resolution) {
-        if (format.resolution.includes("x")) {
-          const parts = format.resolution.split("x");
-          heightVal = parseInt(parts[1]);
-        } else if (format.resolution.includes("p")) {
-          heightVal = parseInt(format.resolution.replace("p", ""));
-        }
-      }
-
-      // If no valid height from resolution string, try parsing the string itself if it's just a number
-      if (!heightVal && format.resolution && !isNaN(parseInt(format.resolution))) {
-        heightVal = parseInt(format.resolution);
-      }
-
-      if (heightVal && !isNaN(heightVal)) {
-        if (heightVal >= 144) { // Filter out very low res or thumbnails
-          // Normalize to standard resolutions
-          if (heightVal >= 4320) resolutions.add("8K");
-          else if (heightVal >= 2160) resolutions.add("4K");
-          else if (heightVal >= 1440) resolutions.add("1440p");
-          else if (heightVal >= 1080) resolutions.add("1080p");
-          else if (heightVal >= 720) resolutions.add("720p");
-          else if (heightVal >= 480) resolutions.add("480p");
-          else if (heightVal >= 360) resolutions.add("360p");
-          else if (heightVal >= 240) resolutions.add("240p");
-          else if (heightVal >= 144) resolutions.add("144p");
-          else resolutions.add(`${heightVal}p`);
-        }
+    if (format.hasVideo && format.resolution) {
+      const heightMatch = format.resolution.match(/(\d+)p?$/) || format.resolution.match(/^(\d+)x/);
+      const height = heightMatch ? parseInt(heightMatch[1]) : 0;
+      if (height >= 144) {
+        if (height >= 4320) resolutions.add("8K");
+        else if (height >= 2160) resolutions.add("4K");
+        else if (height >= 1440) resolutions.add("1440p");
+        else if (height >= 1080) resolutions.add("1080p");
+        else if (height >= 720) resolutions.add("720p");
+        else if (height >= 480) resolutions.add("480p");
+        else if (height >= 360) resolutions.add("360p");
+        else if (height >= 144) resolutions.add("240p");
       }
     }
   }
+  const orderedRes = ["8K", "4K", "1440p", "1080p", "720p", "480p", "360p", "240p"];
+  return Array.from(resolutions).sort((a, b) => orderedRes.indexOf(a) - orderedRes.indexOf(b));
+}
 
-  const resOrder = ["8K", "4K", "1440p", "1080p", "720p", "480p", "360p", "240p", "144p"];
+/**
+ * Health check function to verify all dependencies are available
+ */
+export function checkDependencies(): { ytdlp: boolean; ffmpeg: boolean; deno: boolean; cookies: boolean } {
+  let denoInstalled = false;
+  try {
+    const denoCmd = isWindows ? "where deno" : "which deno";
+    execSync(denoCmd, { stdio: "ignore", env: { ...process.env, PATH: getExtendedPath() } });
+    denoInstalled = true;
+  } catch {
+    denoInstalled = false;
+  }
 
-  return Array.from(resolutions).sort((a, b) => {
-    const aIndex = resOrder.indexOf(a);
-    const bIndex = resOrder.indexOf(b);
+  return {
+    ytdlp: checkYtDlpInstalled(),
+    ffmpeg: checkFfmpegInstalled(),
+    deno: denoInstalled,
+    cookies: getCookiesPath() !== null,
+  };
+}
 
-    // If both are standard resolutions, sort by index
-    if (aIndex !== -1 && bIndex !== -1) {
-      return aIndex - bIndex;
-    }
-
-    // Otherwise sort numerically
-    const aNum = parseInt(a.replace("p", "").replace("K", "000"));
-    const bNum = parseInt(b.replace("p", "").replace("K", "000"));
-    return bNum - aNum;
-  });
+interface DownloadOptions {
+  jobId: string;
+  url: string;
+  mode: "video" | "audio";
+  formatId?: string;
+  resolution?: string;
+  audioFormat?: AudioFormat;
+  audioBitrate?: number;
+  metadata?: { title?: string; artist?: string; album?: string; };
+  onProgress: (progress: number, stage: "downloading" | "converting") => void;
 }

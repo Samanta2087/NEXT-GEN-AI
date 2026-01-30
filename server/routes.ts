@@ -8,7 +8,7 @@ import { spawn, execSync } from "child_process";
 import ffmpeg from "fluent-ffmpeg";
 import { storage } from "./storage";
 import { createJobSchema, updateJobSchema } from "@shared/schema";
-import { analyzeUrl, downloadMedia, getDownloadPath, cleanupDownload, getAvailableResolutions } from "./ytdlp";
+import { analyzeUrl, downloadMedia, getDownloadPath, cleanupDownload, getAvailableResolutions, checkDependencies } from "./ytdlp";
 import type { DownloadJob, MediaInfo, ImageJob, PdfJob, ImageSettings, PdfSettings } from "@shared/schema";
 import * as imageProcessor from "./imageProcessor";
 import * as pdfProcessor from "./pdfProcessor";
@@ -195,6 +195,45 @@ export async function registerRoutes(
     ws.on("error", () => {
       clients.delete(clientId);
     });
+  });
+
+  // Health check endpoint - useful for VPS deployment verification
+  app.get("/api/health", async (req, res) => {
+    try {
+      const deps = checkDependencies();
+      const status = deps.ytdlp && deps.ffmpeg ? "healthy" : "degraded";
+
+      res.json({
+        status,
+        timestamp: new Date().toISOString(),
+        platform: process.platform,
+        nodeVersion: process.version,
+        dependencies: {
+          ytdlp: {
+            installed: deps.ytdlp,
+            required: true,
+            message: deps.ytdlp ? "OK" : "Install with: pip install yt-dlp"
+          },
+          ffmpeg: {
+            installed: deps.ffmpeg,
+            required: true,
+            message: deps.ffmpeg ? "OK" : "Install with: apt install ffmpeg (Ubuntu) or brew install ffmpeg (Mac)"
+          },
+          deno: {
+            installed: deps.deno,
+            required: false,
+            message: deps.deno ? "OK" : "Optional: Install for better YouTube support - curl -fsSL https://deno.land/install.sh | sh"
+          },
+          cookies: {
+            configured: deps.cookies,
+            required: false,
+            message: deps.cookies ? "cookies.txt found" : "No cookies.txt found - YouTube may require authentication"
+          }
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ status: "error", message: error.message });
+    }
   });
 
   app.post("/api/upload", upload.single("file"), async (req, res) => {
