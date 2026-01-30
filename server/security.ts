@@ -149,6 +149,7 @@ export function setupSecurity(app: Express) {
   app.use(cors(corsOptions));
 
   // Helmet security headers
+  /* Helmet disabled temporarily for HTTP debugging
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -172,6 +173,7 @@ export function setupSecurity(app: Express) {
       hsts: false, // Disable HSTS for HTTP sites
     })
   );
+  */
 
   // Prevent clickjacking
   app.use(helmet.frameguard({ action: 'deny' }));
